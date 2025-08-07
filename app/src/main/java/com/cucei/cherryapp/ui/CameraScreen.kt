@@ -47,8 +47,7 @@ enum class FotoDestino {
 @Composable
 fun CameraScreen(
     onBack: () -> Unit,
-    onPhotoSaved: (File) -> Unit, // Solo para galería
-    onPhotoSent: (File) -> Unit  // Solo para servidor
+    onPhotoTaken: (File) -> Unit // Nueva función para cuando se toma la foto
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -58,19 +57,22 @@ fun CameraScreen(
     var showQualityDropdown by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var isTakingPhoto by remember { mutableStateOf(false) }
-    var photoFile by remember { mutableStateOf<File?>(null) }
-    var photoBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
     val imageCapture = remember { ImageCapture.Builder().build() }
 
-    // Resoluciones cuadradas para diferentes calidades
+    // Resoluciones actualizadas según los requerimientos
     val resoluciones = mapOf(
-        1 to 1024,  // 1MP (1024x1024)
-        2 to 1448,  // 2MP (1448x1448)
-        5 to 2304   // 5MP (2304x2304)
+        1 to 1280,  // VGA (640x480) -> 1MP (1280x720)
+        2 to 1920,  // 2MP (1920x1080)
+        5 to 2592   // 5MP (2592x1944)
     )
     val calidadOptions = listOf(1, 2, 5)
+    val calidadLabels = mapOf(
+        1 to "VGA (640x480)",
+        2 to "1MP (1280x720)",
+        5 to "2MP (1920x1080)"
+    )
 
     // Permisos
     val requestCameraPermission = rememberLauncherForActivityResult(
@@ -101,160 +103,95 @@ fun CameraScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            if (photoBitmap == null) {
-                // Vista previa de cámara y controles
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.Bottom
+            // Vista previa de cámara y controles
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Bottom
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                            CameraPreview(
-                                imageCapture = imageCapture,
-                                cameraExecutor = cameraExecutor,
-                                lifecycleOwner = lifecycleOwner
-                            )
-                        }
-                    }
-                    // Controles inferiores
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.5f))
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // ComboBox de calidad
-                        Box {
-                            OutlinedButton(onClick = { showQualityDropdown = true }) {
-                                Text("${calidadFoto} MP")
-                            }
-                            DropdownMenu(
-                                expanded = showQualityDropdown,
-                                onDismissRequest = { showQualityDropdown = false }
-                            ) {
-                                calidadOptions.forEach { mp ->
-                                    DropdownMenuItem(
-                                        text = { Text("${mp} MP") },
-                                        onClick = {
-                                            calidadFoto = mp
-                                            showQualityDropdown = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(Modifier.weight(1f))
-                        // Botón de captura
-                        Button(
-                            onClick = {
-                                if (!isTakingPhoto) {
-                                    isTakingPhoto = true
-                                    takePhoto(
-                                        context = context,
-                                        imageCapture = imageCapture,
-                                        cameraExecutor = cameraExecutor,
-                                        resolucion = resoluciones[calidadFoto] ?: 1448,
-                                        onPhotoReady = { file, bitmap ->
-                                            isTakingPhoto = false
-                                            photoFile = file
-                                            photoBitmap = bitmap
-                                        },
-                                        onError = { errorMsg ->
-                                            isTakingPhoto = false
-                                            error = errorMsg
-                                        }
-                                    )
-                                }
-                            },
-                            modifier = Modifier.size(80.dp),
-                            shape = CircleShape,
-                            enabled = !isTakingPhoto
-                        ) {
-                            if (isTakingPhoto) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(40.dp),
-                                    color = MaterialTheme.colorScheme.onPrimary
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Default.Camera,
-                                    contentDescription = "Tomar foto",
-                                    modifier = Modifier.size(40.dp)
-                                )
-                            }
-                        }
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                        CameraPreview(
+                            imageCapture = imageCapture,
+                            cameraExecutor = cameraExecutor,
+                            lifecycleOwner = lifecycleOwner
+                        )
                     }
                 }
-            } else {
-                // Preview de la foto tomada y opciones Guardar/Enviar
-                Column(
+                // Controles inferiores
+                Row(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.5f))
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .padding(16.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color.White),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        photoBitmap?.let {
-                            androidx.compose.foundation.Image(
-                                painter = androidx.compose.ui.graphics.painter.BitmapPainter(it.asImageBitmap()),
-                                contentDescription = "Preview foto",
-                                modifier = Modifier.fillMaxSize()
-                            )
+                    // ComboBox de calidad
+                    Box {
+                        OutlinedButton(onClick = { showQualityDropdown = true }) {
+                            Text(calidadLabels[calidadFoto] ?: "${calidadFoto} MP")
+                        }
+                        DropdownMenu(
+                            expanded = showQualityDropdown,
+                            onDismissRequest = { showQualityDropdown = false }
+                        ) {
+                            calidadOptions.forEach { mp ->
+                                DropdownMenuItem(
+                                    text = { Text(calidadLabels[mp] ?: "${mp} MP") },
+                                    onClick = {
+                                        calidadFoto = mp
+                                        showQualityDropdown = false
+                                    }
+                                )
+                            }
                         }
                     }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly
+                    Spacer(Modifier.weight(1f))
+                    // Botón de captura
+                    Button(
+                        onClick = {
+                            if (!isTakingPhoto) {
+                                isTakingPhoto = true
+                                takePhoto(
+                                    context = context,
+                                    imageCapture = imageCapture,
+                                    cameraExecutor = cameraExecutor,
+                                    resolucion = resoluciones[calidadFoto] ?: 1920,
+                                    onPhotoReady = { file, _ ->
+                                        isTakingPhoto = false
+                                        onPhotoTaken(file) // Usar la nueva función
+                                    },
+                                    onError = { errorMsg ->
+                                        isTakingPhoto = false
+                                        error = errorMsg
+                                    }
+                                )
+                            }
+                        },
+                        modifier = Modifier.size(80.dp),
+                        shape = CircleShape,
+                        enabled = !isTakingPhoto
                     ) {
-                        Button(
-                            onClick = {
-                                photoFile?.let { onPhotoSaved(it) }
-                                photoFile = null
-                                photoBitmap = null
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFF5F5F5),
-                                contentColor = Color.Black
-                            ),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Guardar")
-                        }
-                        Spacer(Modifier.width(16.dp))
-                        Button(
-                            onClick = {
-                                photoFile?.let { onPhotoSent(it) }
-                                photoFile = null
-                                photoBitmap = null
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFF5F5F5),
-                                contentColor = Color.Black
-                            ),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Enviar")
+                        if (isTakingPhoto) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(40.dp),
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.Camera,
+                                contentDescription = "Tomar foto",
+                                modifier = Modifier.size(40.dp)
+                            )
                         }
                     }
                 }
             }
+            
             // Error dialog
             if (error != null) {
                 AlertDialog(

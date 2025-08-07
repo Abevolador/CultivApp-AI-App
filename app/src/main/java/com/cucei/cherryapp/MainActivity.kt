@@ -64,15 +64,24 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.window.DialogProperties
 import com.cucei.cherryapp.ui.CameraScreen
 import com.cucei.cherryapp.ui.FotoDestino
+import com.cucei.cherryapp.ui.ApiConfigScreen
+import com.cucei.cherryapp.ui.PlantSelectionScreen
+import com.cucei.cherryapp.ui.DataListScreen
+import com.cucei.cherryapp.ui.ChartsScreen
 import com.cucei.cherryapp.ui.theme.WhiteButton
 import com.cucei.cherryapp.ui.theme.BlackText
 
-// Sealed class Pantalla y data class Registro permanecen igual
+// Sealed class Pantalla actualizada con nuevas pantallas
 sealed class Pantalla {
     object Inicio : Pantalla()
     object MostrarDatos : Pantalla()
     object Galeria : Pantalla()
-    object Camara : Pantalla() // Si la usas explícitamente como un estado de 'pantalla'
+    object Camara : Pantalla()
+    object AnalisisPlanta : Pantalla()
+    object ConfigAPI : Pantalla() // Nueva pantalla de configuración de API
+    object SeleccionPlanta : Pantalla() // Nueva pantalla de selección de plantas
+    object ListaDatosPlanta : Pantalla() // Nueva pantalla de listado de datos
+    object GraficosHuerto : Pantalla() // Nueva pantalla de gráficos
 }
 
 data class Registro(val temperatura: String, val humedad: String, val luminosidad: String)
@@ -106,8 +115,7 @@ fun CherryApp() {
     val FOTOS_DIR = remember { File(context.filesDir, "CherryFotos").apply { mkdirs() } }
 
 
-    var cargarRed by remember { mutableStateOf(false) }
-    var cargando by remember { mutableStateOf(false) }
+
     var showGuardarDialog by remember { mutableStateOf<File?>(null) }
     var imagenSeleccionada by remember { mutableStateOf<File?>(null) }
     var showConfirmDelete by remember { mutableStateOf<File?>(null) }
@@ -115,6 +123,15 @@ fun CherryApp() {
     var calidadFoto by remember { mutableStateOf(2) }
     var showCamaraDialog by remember { mutableStateOf(false) } // Para el diálogo de selección de cámara
     var showCamaraPersonalizada by remember { mutableStateOf(false) } // Para mostrar tu CameraScreen
+    var showVistaPrevia by remember { mutableStateOf<File?>(null) } // Para vista previa de foto
+    var showResultadosAnalisis by remember { mutableStateOf<String?>(null) } // Para mostrar resultados del análisis
+    var analizandoPlanta by remember { mutableStateOf(false) } // Para indicador de carga durante análisis
+    
+    // Variables para las nuevas pantallas de API REST
+    var plantaSeleccionada by remember { mutableStateOf<com.cucei.cherryapp.data.Planta?>(null) }
+    var conjuntoDatosSeleccionado by remember { mutableStateOf<com.cucei.cherryapp.data.ConjuntoDatos?>(null) }
+    
+
 
     val resoluciones = remember { mapOf(
         1 to (1280 to 800),
@@ -130,7 +147,7 @@ fun CherryApp() {
 
     // --- MANEJO DEL BOTÓN ATRÁS ---
     // Este BackHandler es para la navegación principal y el doble toque para salir
-    BackHandler(enabled = pantalla == Pantalla.Inicio || pantalla == Pantalla.Galeria || pantalla == Pantalla.MostrarDatos) {
+    BackHandler(enabled = pantalla == Pantalla.Inicio || pantalla == Pantalla.Galeria || pantalla == Pantalla.MostrarDatos || pantalla == Pantalla.AnalisisPlanta || pantalla == Pantalla.ConfigAPI || pantalla == Pantalla.SeleccionPlanta || pantalla == Pantalla.ListaDatosPlanta || pantalla == Pantalla.GraficosHuerto) {
         Log.d("BackHandler", "Principal: Pantalla actual: $pantalla")
         when (pantalla) {
             Pantalla.Inicio -> {
@@ -147,7 +164,7 @@ fun CherryApp() {
                     backPressedTime = System.currentTimeMillis()
                 }
             }
-            Pantalla.Galeria, Pantalla.MostrarDatos -> {
+            Pantalla.Galeria, Pantalla.MostrarDatos, Pantalla.AnalisisPlanta, Pantalla.ConfigAPI, Pantalla.SeleccionPlanta, Pantalla.ListaDatosPlanta, Pantalla.GraficosHuerto -> {
                 Log.d("BackHandler", "Principal: Volviendo a Inicio desde $pantalla")
                 pantalla = Pantalla.Inicio
             }
@@ -174,6 +191,22 @@ fun CherryApp() {
             showCamaraPersonalizada = false
             // Opcional: si la cámara era una "pantalla", volver a inicio
             // if (pantalla == Pantalla.Camara) pantalla = Pantalla.Inicio
+        }
+    }
+
+    // BackHandler para la vista previa de foto
+    if (showVistaPrevia != null) {
+        BackHandler(enabled = true) {
+            Log.d("BackHandler", "Cerrando vista previa de foto")
+            showVistaPrevia = null
+        }
+    }
+
+    // BackHandler para los resultados de análisis
+    if (showResultadosAnalisis != null) {
+        BackHandler(enabled = true) {
+            Log.d("BackHandler", "Cerrando resultados de análisis")
+            showResultadosAnalisis = null
         }
     }
     // --- FIN MANEJO DEL BOTÓN ATRÁS ---
@@ -283,16 +316,13 @@ fun CherryApp() {
                     ) { Text("📂 Abrir archivo JSON local") }
                     Spacer(Modifier.height(12.dp))
                     Button(onClick = {
-                        cargarRed = true
-                        cargando = true // Mostrar indicador de carga
-                        pantalla = Pantalla.MostrarDatos
-                        registros = emptyList()
+                        pantalla = Pantalla.ConfigAPI
                     },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = WhiteButton, contentColor = BlackText)
-                    ) { Text("📡 Cargar datos desde red") }
+                    ) { Text("⚙️ Configurar API del Huerto") }
                     Spacer(Modifier.height(12.dp))
-                    Button(onClick = { showCamaraDialog = true }, // Este abre el diálogo de selección
+                    Button(onClick = { pantalla = Pantalla.AnalisisPlanta }, // Navegar a la nueva pantalla
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = WhiteButton, contentColor = BlackText)
                     ) { Text("📸 Tomar foto") }
@@ -314,49 +344,50 @@ fun CherryApp() {
                         showCamaraPersonalizada = false
                         // if (pantalla == Pantalla.Camara) pantalla = Pantalla.Inicio // Opcional
                     },
-                    onPhotoSaved = { file ->
-                        val destFile = File(FOTOS_DIR, "IMG_${System.currentTimeMillis()}.jpg")
-                        try {
-                            file.copyTo(destFile, overwrite = true)
-                            file.delete() // Borra el temporal si es necesario
-                            fotos = getFotos(FOTOS_DIR) // Actualizar la lista de fotos
-                            coroutineScope.launch { snackbarHostState.showSnackbar("Foto guardada en la galería de la app.") }
-                        } catch (e: IOException) {
-                            coroutineScope.launch { snackbarHostState.showSnackbar("Error al guardar foto.") }
-                            Log.e("CherryApp", "Error guardando foto de CameraScreen", e)
-                        }
+                    onPhotoTaken = { file ->
+                        showVistaPrevia = file // Mostrar la nueva vista previa
                         showCamaraPersonalizada = false
-                    },
-                    onPhotoSent = { file ->
-                        // Simular envío
-                        Log.d("CherryApp", "Simulando envío de foto: ${file.name}")
-                        file.delete() // Opcional
-                        showCamaraPersonalizada = false
-                        coroutineScope.launch { snackbarHostState.showSnackbar("(Simulado) Foto enviada al servidor.") }
                     }
                 )
             }
 
-            // Efecto para cargar datos desde red
-            LaunchedEffect(cargarRed) {
-                if (cargarRed) {
-                    cargando = true // Asegurarse que 'cargando' se active aquí
-                    try {
-                        val json = withContext(Dispatchers.IO) {
-                            // Considera un timeout y manejo de errores más robusto
-                            java.net.URL("http://192.168.1.100:5000/datos").readText()
-                        }
-                        registros = parseJson(json)
-                    } catch (e: Exception) {
-                        Log.e("CherryApp", "Error de red", e)
-                        coroutineScope.launch { snackbarHostState.showSnackbar("Error de red: ${e.localizedMessage}") }
-                        pantalla = Pantalla.Inicio // Volver a inicio si hay error de red
-                    } finally {
-                        cargarRed = false
-                        cargando = false
+            // Pantalla de análisis de plantas
+            if (pantalla == Pantalla.AnalisisPlanta && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.Top,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)) {
+                        Text("🍒", fontSize = 32.sp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Análisis de Plantas", fontSize = 32.sp, fontWeight = FontWeight.Bold)
                     }
+                    Spacer(Modifier.height(16.dp))
+                    Button(onClick = { 
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                            showCamaraPersonalizada = true
+                        } else {
+                            requestCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        }
+                    },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = WhiteButton, contentColor = BlackText)
+                    ) { Text("📸 Abrir Cámara Personalizada") }
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = {
+                        fotos = getFotos(FOTOS_DIR)
+                        pantalla = Pantalla.Galeria
+                    },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = WhiteButton, contentColor = BlackText)
+                    ) { Text("🖼️ Ver Galería de la App") }
                 }
             }
+
+
 
             // Mostrar datos JSON
             if (pantalla == Pantalla.MostrarDatos && !showCamaraPersonalizada && imagenSeleccionada == null) {
@@ -368,11 +399,7 @@ fun CherryApp() {
                         colors = ButtonDefaults.buttonColors(containerColor = WhiteButton, contentColor = BlackText)
                     ) { Text("← Volver") }
 
-                    if (cargando) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
-                        }
-                    } else if (registros.isEmpty()) {
+                    if (registros.isEmpty()) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text("No hay datos para mostrar.")
                         }
@@ -519,6 +546,30 @@ fun CherryApp() {
                             }) {
                                 Icon(Icons.Default.Share, contentDescription = "Compartir", tint = MaterialTheme.colorScheme.onBackground)
                             }
+                            IconButton(onClick = {
+                                analizandoPlanta = true
+                                coroutineScope.launch {
+                                    val resultado = analizarPlanta(file)
+                                    analizandoPlanta = false
+                                    if (resultado != null) {
+                                        showResultadosAnalisis = resultado
+                                        imagenSeleccionada = null
+                                    } else {
+                                        coroutineScope.launch { 
+                                            snackbarHostState.showSnackbar("No se pudo conectar al servidor para el análisis") 
+                                        }
+                                    }
+                                }
+                            }) {
+                                if (analizandoPlanta) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    )
+                                } else {
+                                    Icon(Icons.Default.Send, contentDescription = "Enviar a Analizar", tint = MaterialTheme.colorScheme.onBackground)
+                                }
+                            }
                             IconButton(onClick = { showConfirmDelete = file }) {
                                 Icon(Icons.Default.Delete, contentDescription = "Borrar", tint = MaterialTheme.colorScheme.onBackground)
                             }
@@ -526,6 +577,192 @@ fun CherryApp() {
                     }
                 }
             }
+
+            // Vista previa de foto
+            if (showVistaPrevia != null) {
+                val file = showVistaPrevia!!
+                val bitmap = remember(file.path) {
+                    try {
+                        BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
+                    } catch (e: Exception) {
+                        Log.e("CherryApp", "Error cargando bitmap para vista previa", e)
+                        null
+                    }
+                }
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    if (bitmap != null) {
+                        Image(
+                            bitmap = bitmap,
+                            contentDescription = "Vista previa de foto",
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Text("Error al cargar la imagen", Modifier.align(Alignment.Center))
+                    }
+                    
+                    // Botones de acción
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.BottomCenter)
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
+                            .padding(16.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                if (guardarEnGaleríaDispositivo(context, file)) {
+                                    coroutineScope.launch { snackbarHostState.showSnackbar("Foto guardada en galería del dispositivo") }
+                                } else {
+                                    coroutineScope.launch { snackbarHostState.showSnackbar("Error al guardar en galería del dispositivo") }
+                                }
+                                showVistaPrevia = null
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = WhiteButton, contentColor = BlackText),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Guardar en Galería del Dispositivo")
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            Button(
+                                onClick = {
+                                    showVistaPrevia = null
+                                    showCamaraPersonalizada = true
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = WhiteButton, contentColor = BlackText),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Eliminar y Reintentar")
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Button(
+                                onClick = {
+                                    analizandoPlanta = true
+                                    coroutineScope.launch {
+                                        val resultado = analizarPlanta(file)
+                                        analizandoPlanta = false
+                                        if (resultado != null) {
+                                            showResultadosAnalisis = resultado
+                                            showVistaPrevia = null
+                                        } else {
+                                            coroutineScope.launch { 
+                                                snackbarHostState.showSnackbar("No se pudo conectar al servidor para el análisis") 
+                                            }
+                                            val destFile = File(FOTOS_DIR, "IMG_${System.currentTimeMillis()}.jpg")
+                                            try {
+                                                file.copyTo(destFile, overwrite = true)
+                                                fotos = getFotos(FOTOS_DIR)
+                                                coroutineScope.launch { snackbarHostState.showSnackbar("Foto guardada en galería de la app para análisis posterior") }
+                                            } catch (e: IOException) {
+                                                coroutineScope.launch { snackbarHostState.showSnackbar("Error al guardar foto") }
+                                            }
+                                            showVistaPrevia = null
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = WhiteButton, contentColor = BlackText),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Mandar a Analizar")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Resultados de análisis
+            if (showResultadosAnalisis != null) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(onClick = { showResultadosAnalisis = null }) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "Volver")
+                            }
+                            Text("Resultados del Análisis", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        Card(
+                            modifier = Modifier.fillMaxSize(),
+                            elevation = CardDefaults.cardElevation(4.dp)
+                        ) {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(16.dp)
+                            ) {
+                                item {
+                                    Text(
+                                        showResultadosAnalisis!!,
+                                        fontSize = 16.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Pantalla de configuración de API
+            if (pantalla == Pantalla.ConfigAPI && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
+                ApiConfigScreen(
+                    onBack = { pantalla = Pantalla.Inicio },
+                    onConfigSuccess = { pantalla = Pantalla.SeleccionPlanta }
+                )
+            }
+
+            // Pantalla de selección de plantas
+            if (pantalla == Pantalla.SeleccionPlanta && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
+                PlantSelectionScreen(
+                    onBack = { pantalla = Pantalla.ConfigAPI },
+                    onPlantSelected = { planta ->
+                        plantaSeleccionada = planta
+                        pantalla = Pantalla.ListaDatosPlanta
+                    }
+                )
+            }
+
+            // Pantalla de listado de datos de planta
+            if (pantalla == Pantalla.ListaDatosPlanta && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
+                plantaSeleccionada?.let { planta ->
+                    DataListScreen(
+                        planta = planta,
+                        onBack = { pantalla = Pantalla.SeleccionPlanta },
+                        onDataSelected = { conjuntoDatos ->
+                            conjuntoDatosSeleccionado = conjuntoDatos
+                            pantalla = Pantalla.GraficosHuerto
+                        }
+                    )
+                }
+            }
+
+            // Pantalla de gráficos
+            if (pantalla == Pantalla.GraficosHuerto && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
+                conjuntoDatosSeleccionado?.let { conjuntoDatos ->
+                    ChartsScreen(
+                        conjuntoDatos = conjuntoDatos,
+                        onBack = { pantalla = Pantalla.ListaDatosPlanta }
+                    )
+                }
+            }
+
 
 
             // --- DIÁLOGOS ---
@@ -613,22 +850,41 @@ fun parseJson(jsonString: String?): List<Registro> {
     }
     val list = mutableListOf<Registro>()
     try {
-        // Asumiendo que el JSON es un Array de Objetos
-        // Si la raíz es un objeto que contiene un array, ajusta esto.
-        // Ejemplo: { "datos": [ ... ] } requeriría `JSONObject(jsonString).getJSONArray("datos")`
-        val jsonArray = org.json.JSONArray(jsonString)
-        for (i in 0 until jsonArray.length()) {
-            val jsonObject = jsonArray.getJSONObject(i)
-            // Usar optString para evitar excepciones si la clave no existe, y proveer un default.
-            val temp = jsonObject.optString("temperatura", "N/A")
-            val hum = jsonObject.optString("humedad", "N/A")
-            val lum = jsonObject.optString("luminosidad", "N/A")
-            list.add(Registro(temp, hum, lum))
+        // Intentar parsear como array primero
+        try {
+            val jsonArray = org.json.JSONArray(jsonString)
+            for (i in 0 until jsonArray.length()) {
+                val jsonObject = jsonArray.getJSONObject(i)
+                val temp = jsonObject.optString("temperatura", "N/A")
+                val hum = jsonObject.optString("humedad", "N/A")
+                val lum = jsonObject.optString("luminosidad", "N/A")
+                list.add(Registro(temp, hum, lum))
+            }
+        } catch (e: org.json.JSONException) {
+            // Si no es un array, intentar como objeto con array interno
+            val jsonObject = org.json.JSONObject(jsonString)
+            if (jsonObject.has("datos")) {
+                val jsonArray = jsonObject.getJSONArray("datos")
+                for (i in 0 until jsonArray.length()) {
+                    val item = jsonArray.getJSONObject(i)
+                    val temp = item.optString("temperatura", "N/A")
+                    val hum = item.optString("humedad", "N/A")
+                    val lum = item.optString("luminosidad", "N/A")
+                    list.add(Registro(temp, hum, lum))
+                }
+            } else {
+                // Si es un objeto simple, intentar extraer los campos directamente
+                val temp = jsonObject.optString("temperatura", "N/A")
+                val hum = jsonObject.optString("humedad", "N/A")
+                val lum = jsonObject.optString("luminosidad", "N/A")
+                list.add(Registro(temp, hum, lum))
+            }
         }
     } catch (e: org.json.JSONException) {
         Log.e("parseJson", "Error al parsear JSON: ${e.localizedMessage}")
-        // Podrías devolver la lista parcialmente parseada o vacía, según prefieras.
-        // O lanzar una excepción personalizada si el llamador debe manejarla.
+        Log.e("parseJson", "JSON recibido: $jsonString")
+    } catch (e: Exception) {
+        Log.e("parseJson", "Error inesperado al parsear JSON: ${e.localizedMessage}")
     }
     return list
 }
@@ -643,6 +899,65 @@ fun getFotos(directory: File): List<File> {
         file.isFile && (file.extension.equals("jpg", ignoreCase = true) || file.extension.equals("jpeg", ignoreCase = true))
     }?.sortedDescending()?.toList() ?: emptyList<File>().also {
         Log.d("getFotos", "No se encontraron archivos jpg/jpeg en ${directory.absolutePath}")
+    }
+}
+
+// Función para analizar planta enviando foto al servidor
+suspend fun analizarPlanta(file: File): String? {
+    return try {
+        withContext(Dispatchers.IO) {
+            val url = java.net.URL("http://192.168.1.100:5000/analizar_planta")
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "image/jpeg")
+            
+            file.inputStream().use { input ->
+                connection.outputStream.use { output ->
+                    input.copyTo(output)
+                }
+            }
+            
+            val responseCode = connection.responseCode
+            if (responseCode == 200) {
+                connection.inputStream.bufferedReader().readText()
+            } else {
+                null
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("analizarPlanta", "Error al analizar planta", e)
+        null
+    }
+}
+
+
+
+// Función para guardar foto en la galería del dispositivo
+fun guardarEnGaleríaDispositivo(context: Context, file: File): Boolean {
+    return try {
+        val contentValues = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, file.name)
+            put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CherryApp")
+            }
+        }
+        
+        val resolver = context.contentResolver
+        val uri = resolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+        
+        uri?.let { 
+            resolver.openOutputStream(it)?.use { output ->
+                file.inputStream().use { input ->
+                    input.copyTo(output)
+                }
+            }
+            true
+        } ?: false
+    } catch (e: Exception) {
+        Log.e("guardarEnGaleríaDispositivo", "Error al guardar en galería", e)
+        false
     }
 }
 
