@@ -7,7 +7,7 @@ import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
-import android.util.Log // Importante para depuración
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -49,7 +49,7 @@ import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
 import android.content.pm.PackageManager
-import androidx.activity.compose.BackHandler // Importante
+import androidx.activity.compose.BackHandler
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -63,30 +63,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.window.DialogProperties
 import com.cucei.cherryapp.ui.CameraScreen
-import com.cucei.cherryapp.ui.FotoDestino
-import com.cucei.cherryapp.ui.ApiConfigScreen
-import com.cucei.cherryapp.ui.PlantSelectionScreen
-import com.cucei.cherryapp.ui.DataListScreen
+import com.cucei.cherryapp.ui.PlantDataScreen
 import com.cucei.cherryapp.ui.ChartsScreen
+import com.cucei.cherryapp.viewmodel.PlantDataViewModel
 import com.cucei.cherryapp.ui.theme.WhiteButton
 import com.cucei.cherryapp.ui.theme.BlackText
 
-// Sealed class Pantalla actualizada con nuevas pantallas
+// Sealed class Pantalla simplificada
 sealed class Pantalla {
     object Inicio : Pantalla()
     object MostrarDatos : Pantalla()
     object Galeria : Pantalla()
     object Camara : Pantalla()
     object AnalisisPlanta : Pantalla()
-    object ConfigAPI : Pantalla() // Nueva pantalla de configuración de API
-    object SeleccionPlanta : Pantalla() // Nueva pantalla de selección de plantas
-    object ListaDatosPlanta : Pantalla() // Nueva pantalla de listado de datos
-    object GraficosHuerto : Pantalla() // Nueva pantalla de gráficos
+    object DatosPlantas : Pantalla() // Nueva pantalla para datos de plantas
+    object Graficos : Pantalla() // Nueva pantalla para gráficos
 }
 
 data class Registro(val temperatura: String, val humedad: String, val luminosidad: String)
 
-// MainActivity permanece igual
+// MainActivity
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -97,10 +93,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    // ASEGÚRATE DE NO TENER onBackPressed() SOBRESCRITO AQUÍ
-    // NI onBackPressedDispatcher.addCallback en un init {}
 }
-
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -109,35 +102,23 @@ fun CherryApp() {
     var pantalla by remember { mutableStateOf<Pantalla>(Pantalla.Inicio) }
     var registros by remember { mutableStateOf<List<Registro>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
-    var showError by remember { mutableStateOf(false) } // Considera usar Snackbar para errores también
+    var showError by remember { mutableStateOf(false) }
     var fotos by remember { mutableStateOf<List<File>>(emptyList()) }
     var fotoUri by remember { mutableStateOf<Uri?>(null) }
     val FOTOS_DIR = remember { File(context.filesDir, "CherryFotos").apply { mkdirs() } }
-
-
 
     var showGuardarDialog by remember { mutableStateOf<File?>(null) }
     var imagenSeleccionada by remember { mutableStateOf<File?>(null) }
     var showConfirmDelete by remember { mutableStateOf<File?>(null) }
     var showSendDialog by remember { mutableStateOf<File?>(null) }
-    var calidadFoto by remember { mutableStateOf(2) }
-    var showCamaraDialog by remember { mutableStateOf(false) } // Para el diálogo de selección de cámara
-    var showCamaraPersonalizada by remember { mutableStateOf(false) } // Para mostrar tu CameraScreen
-    var showVistaPrevia by remember { mutableStateOf<File?>(null) } // Para vista previa de foto
-    var showResultadosAnalisis by remember { mutableStateOf<String?>(null) } // Para mostrar resultados del análisis
-    var analizandoPlanta by remember { mutableStateOf(false) } // Para indicador de carga durante análisis
+    var showCamaraDialog by remember { mutableStateOf(false) }
+    var showCamaraPersonalizada by remember { mutableStateOf(false) }
+    var showVistaPrevia by remember { mutableStateOf<File?>(null) }
+    var showResultadosAnalisis by remember { mutableStateOf<String?>(null) }
+    var analizandoPlanta by remember { mutableStateOf(false) }
     
-    // Variables para las nuevas pantallas de API REST
-    var plantaSeleccionada by remember { mutableStateOf<com.cucei.cherryapp.data.Planta?>(null) }
-    var conjuntoDatosSeleccionado by remember { mutableStateOf<com.cucei.cherryapp.data.ConjuntoDatos?>(null) }
-    
-
-
-    val resoluciones = remember { mapOf(
-        1 to (1280 to 800),
-        2 to (1920 to 1080),
-        5 to (2592 to 1944)
-    )}
+    // ViewModel para datos de plantas
+    val plantDataViewModel = remember { PlantDataViewModel() }
 
     // Para el doble toque para salir y Snackbar
     var backPressedTime by remember { mutableStateOf(0L) }
@@ -146,8 +127,7 @@ fun CherryApp() {
     val activity = (LocalContext.current as? Activity)
 
     // --- MANEJO DEL BOTÓN ATRÁS ---
-    // Este BackHandler es para la navegación principal y el doble toque para salir
-    BackHandler(enabled = pantalla == Pantalla.Inicio || pantalla == Pantalla.Galeria || pantalla == Pantalla.MostrarDatos || pantalla == Pantalla.AnalisisPlanta || pantalla == Pantalla.ConfigAPI || pantalla == Pantalla.SeleccionPlanta || pantalla == Pantalla.ListaDatosPlanta || pantalla == Pantalla.GraficosHuerto) {
+    BackHandler(enabled = pantalla == Pantalla.Inicio || pantalla == Pantalla.Galeria || pantalla == Pantalla.MostrarDatos || pantalla == Pantalla.AnalisisPlanta || pantalla == Pantalla.DatosPlantas || pantalla == Pantalla.Graficos) {
         Log.d("BackHandler", "Principal: Pantalla actual: $pantalla")
         when (pantalla) {
             Pantalla.Inicio -> {
@@ -164,21 +144,19 @@ fun CherryApp() {
                     backPressedTime = System.currentTimeMillis()
                 }
             }
-            Pantalla.Galeria, Pantalla.MostrarDatos, Pantalla.AnalisisPlanta, Pantalla.ConfigAPI, Pantalla.SeleccionPlanta, Pantalla.ListaDatosPlanta, Pantalla.GraficosHuerto -> {
+            Pantalla.Galeria, Pantalla.MostrarDatos, Pantalla.AnalisisPlanta, Pantalla.DatosPlantas, Pantalla.Graficos -> {
                 Log.d("BackHandler", "Principal: Volviendo a Inicio desde $pantalla")
                 pantalla = Pantalla.Inicio
             }
             else -> {
-                // No debería llegar aquí si 'enabled' está bien configurado,
-                // pero es bueno tener un log por si acaso.
-                Log.d("BackHandler", "Principal: Estado no manejado o BackHandler incorrecto - $pantalla")
+                Log.d("BackHandler", "Principal: Estado no manejado - $pantalla")
             }
         }
     }
 
     // BackHandler para cerrar la imagen en pantalla completa
     if (imagenSeleccionada != null) {
-        BackHandler(enabled = true) { // Se activa solo cuando imagenSeleccionada no es null
+        BackHandler(enabled = true) {
             Log.d("BackHandler", "Cerrando imagen a pantalla completa")
             imagenSeleccionada = null
         }
@@ -186,11 +164,9 @@ fun CherryApp() {
 
     // BackHandler para la cámara personalizada
     if (showCamaraPersonalizada) {
-        BackHandler(enabled = true) { // Se activa solo cuando showCamaraPersonalizada es true
+        BackHandler(enabled = true) {
             Log.d("BackHandler", "Cerrando cámara personalizada")
             showCamaraPersonalizada = false
-            // Opcional: si la cámara era una "pantalla", volver a inicio
-            // if (pantalla == Pantalla.Camara) pantalla = Pantalla.Inicio
         }
     }
 
@@ -209,18 +185,15 @@ fun CherryApp() {
             showResultadosAnalisis = null
         }
     }
-    // --- FIN MANEJO DEL BOTÓN ATRÁS ---
 
-
-    // Cámara (ActivityResultLauncher)
+    // Cámara (ActivityResultLauncher) - Simplificado para resolución fija 512x512
     val takePhotoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         if (success && fotoUri != null) {
             val file = File(fotoUri!!.path!!)
-            val (ancho, alto) = resoluciones[calidadFoto] ?: (1920 to 1080)
             try {
                 val original = BitmapFactory.decodeFile(file.absolutePath)
                 if (original != null) {
-                    val scaled = Bitmap.createScaledBitmap(original, ancho, alto, true)
+                    val scaled = Bitmap.createScaledBitmap(original, 512, 512, true)
                     file.outputStream().use { out ->
                         scaled.compress(Bitmap.CompressFormat.JPEG, 90, out)
                     }
@@ -228,27 +201,26 @@ fun CherryApp() {
                     scaled.recycle()
                 }
             } catch (e: Exception) {
-                // Usar Snackbar para errores sería más consistente
                 coroutineScope.launch { snackbarHostState.showSnackbar("No se pudo ajustar la resolución: ${e.localizedMessage}") }
                 Log.e("CherryApp", "Error al ajustar resolución", e)
             }
-            showGuardarDialog = file // O directamente guardar y actualizar 'fotos'
+            showGuardarDialog = file
         } else if (!success) {
             coroutineScope.launch { snackbarHostState.showSnackbar("No se pudo tomar la foto") }
         }
-        fotoUri = null // Limpiar Uri después de usarla
+        fotoUri = null
     }
 
-    fun abrirCamaraNativa() { // Renombrada para claridad
+    fun abrirCamaraNativa() {
         try {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val nombreFoto = File(FOTOS_DIR, "IMG_${timestamp}.jpg")
             val uri = FileProvider.getUriForFile(
                 context,
-                "${context.packageName}.provider", // Asegúrate que esto coincida con tu AndroidManifest.xml
+                "${context.packageName}.provider",
                 nombreFoto
             )
-            fotoUri = uri // Guardar URI para usarla en takePhotoLauncher
+            fotoUri = uri
             takePhotoLauncher.launch(uri)
         } catch (e: Exception) {
             coroutineScope.launch { snackbarHostState.showSnackbar("No se pudo abrir la cámara: ${e.localizedMessage}") }
@@ -256,22 +228,14 @@ fun CherryApp() {
         }
     }
 
-    // Permisos (Deberían pedirse antes de llamar a abrirCamaraNativa o showCamaraPersonalizada)
+    // Permisos
     val requestCameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
-            // Decidir qué cámara abrir aquí o en el diálogo
-            // Por ejemplo, si el diálogo ya decidió "Cámara Nativa":
-            // abrirCamaraNativa()
-            // O si decidió "Cámara Personalizada":
-            // showCamaraPersonalizada = true
             coroutineScope.launch { snackbarHostState.showSnackbar("Permiso de cámara concedido.") }
         } else {
             coroutineScope.launch { snackbarHostState.showSnackbar("Permiso de cámara denegado.") }
         }
     }
-    // Podrías necesitar también WRITE_EXTERNAL_STORAGE para versiones antiguas si guardas fuera de filesDir,
-    // pero para `context.filesDir` no es necesario. READ_MEDIA_IMAGES para acceder a galería compartida.
-
 
     // File picker para JSON
     val pickJsonLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -279,7 +243,7 @@ fun CherryApp() {
             try {
                 context.contentResolver.openInputStream(uri)?.use { inputStream ->
                     val json = inputStream.bufferedReader().readText()
-                    registros = parseJson(json) // Asegúrate que parseJson maneje errores
+                    registros = parseJson(json)
                     pantalla = Pantalla.MostrarDatos
                 }
             } catch (e: Exception) {
@@ -289,11 +253,10 @@ fun CherryApp() {
         }
     }
 
-
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { contentPadding ->
-        Box(modifier = Modifier.padding(contentPadding)) { // Aplicar padding del Scaffold
+        Box(modifier = Modifier.padding(contentPadding)) {
 
             // Pantalla principal
             if (pantalla == Pantalla.Inicio && !showCamaraPersonalizada && imagenSeleccionada == null) {
@@ -315,17 +278,15 @@ fun CherryApp() {
                         colors = ButtonDefaults.buttonColors(containerColor = WhiteButton, contentColor = BlackText)
                     ) { Text("📂 Abrir archivo JSON local") }
                     Spacer(Modifier.height(12.dp))
-                    Button(onClick = {
-                        pantalla = Pantalla.ConfigAPI
-                    },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = WhiteButton, contentColor = BlackText)
-                    ) { Text("⚙️ Configurar API del Huerto") }
-                    Spacer(Modifier.height(12.dp))
-                    Button(onClick = { pantalla = Pantalla.AnalisisPlanta }, // Navegar a la nueva pantalla
+                    Button(onClick = { pantalla = Pantalla.AnalisisPlanta },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = WhiteButton, contentColor = BlackText)
                     ) { Text("📸 Tomar foto") }
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = { pantalla = Pantalla.DatosPlantas },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = WhiteButton, contentColor = BlackText)
+                    ) { Text("📊 Datos de Plantas") }
                     Spacer(Modifier.height(12.dp))
                     Button(onClick = {
                         fotos = getFotos(FOTOS_DIR)
@@ -339,15 +300,31 @@ fun CherryApp() {
 
             // Pantalla de cámara personalizada
             if (showCamaraPersonalizada) {
-                CameraScreen( // Asumiendo que CameraScreen es un @Composable
+                CameraScreen(
                     onBack = {
                         showCamaraPersonalizada = false
-                        // if (pantalla == Pantalla.Camara) pantalla = Pantalla.Inicio // Opcional
                     },
                     onPhotoTaken = { file ->
-                        showVistaPrevia = file // Mostrar la nueva vista previa
+                        showVistaPrevia = file
                         showCamaraPersonalizada = false
                     }
+                )
+            }
+
+            // Pantalla de datos de plantas
+            if (pantalla == Pantalla.DatosPlantas && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
+                PlantDataScreen(
+                    onBack = { pantalla = Pantalla.Inicio },
+                    viewModel = plantDataViewModel,
+                    onNavigateToCharts = { pantalla = Pantalla.Graficos }
+                )
+            }
+
+            // Pantalla de gráficos
+            if (pantalla == Pantalla.Graficos && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
+                ChartsScreen(
+                    onBack = { pantalla = Pantalla.DatosPlantas },
+                    viewModel = plantDataViewModel
                 )
             }
 
@@ -387,8 +364,6 @@ fun CherryApp() {
                 }
             }
 
-
-
             // Mostrar datos JSON
             if (pantalla == Pantalla.MostrarDatos && !showCamaraPersonalizada && imagenSeleccionada == null) {
                 Column(Modifier.fillMaxSize()) {
@@ -417,7 +392,7 @@ fun CherryApp() {
                                 ) {
                                     Column(Modifier.padding(16.dp)) {
                                         Text("Registro ${i + 1}", fontWeight = FontWeight.Bold)
-                                        Text("🌡️ Temperatura: ${reg.temperatura}") // Quité el % si no es parte del dato
+                                        Text("🌡️ Temperatura: ${reg.temperatura}")
                                         Text("💧 Humedad: ${reg.humedad}")
                                         Text("🔆 Luminosidad: ${reg.luminosidad}")
                                     }
@@ -436,7 +411,7 @@ fun CherryApp() {
                             .fillMaxWidth()
                             .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween // Para separar título y botón
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("🍒", fontSize = 32.sp)
@@ -456,13 +431,12 @@ fun CherryApp() {
                             columns = GridCells.Fixed(3),
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(horizontal = 4.dp), // Padding para la grid
-                            contentPadding = PaddingValues(4.dp) // Padding interno de la grid
+                                .padding(horizontal = 4.dp),
+                            contentPadding = PaddingValues(4.dp)
                         ) {
                             items(fotos.size) { idx ->
                                 val file = fotos[idx]
-                                // Considerar cargar bitmaps en un hilo de fondo si son muchos o grandes
-                                val bitmap = remember(file.path) { // Usar file.path o file.lastModified() como key
+                                val bitmap = remember(file.path) {
                                     try {
                                         BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
                                     } catch (e: Exception) {
@@ -480,7 +454,6 @@ fun CherryApp() {
                                             .clickable { imagenSeleccionada = file }
                                     )
                                 } else {
-                                    // Placeholder o indicador de error si el bitmap no se carga
                                     Box(modifier = Modifier
                                         .aspectRatio(1f)
                                         .padding(4.dp)
@@ -496,8 +469,7 @@ fun CherryApp() {
 
             // Pantalla completa de imagen seleccionada
             if (imagenSeleccionada != null) {
-                val file = imagenSeleccionada!! // Sabemos que no es null aquí
-                // Cargar bitmap podría ser costoso, considera optimizaciones si es necesario
+                val file = imagenSeleccionada!!
                 val bitmap = remember(file.path) {
                     try {
                         BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
@@ -509,15 +481,14 @@ fun CherryApp() {
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background) // Fondo oscuro para la imagen
-                        .clickable(onClick = { imagenSeleccionada = null }) // Cerrar al tocar fuera (opcional)
+                        .background(MaterialTheme.colorScheme.background)
+                        .clickable(onClick = { imagenSeleccionada = null })
                 ) {
                     if (bitmap != null) {
                         Image(
                             bitmap = bitmap,
                             contentDescription = "Imagen seleccionada",
-                            modifier = Modifier.fillMaxSize() // O .wrapContentSize() para verla completa
-                            // .align(Alignment.Center) si usas wrapContentSize
+                            modifier = Modifier.fillMaxSize()
                         )
                     } else {
                         Text("Error al cargar la imagen", Modifier.align(Alignment.Center))
@@ -614,17 +585,21 @@ fun CherryApp() {
                     ) {
                         Button(
                             onClick = {
-                                if (guardarEnGaleríaDispositivo(context, file)) {
-                                    coroutineScope.launch { snackbarHostState.showSnackbar("Foto guardada en galería del dispositivo") }
-                                } else {
-                                    coroutineScope.launch { snackbarHostState.showSnackbar("Error al guardar en galería del dispositivo") }
+                                val destFile = File(FOTOS_DIR, "IMG_${System.currentTimeMillis()}.jpg")
+                                try {
+                                    file.copyTo(destFile, overwrite = true)
+                                    fotos = getFotos(FOTOS_DIR)
+                                    coroutineScope.launch { snackbarHostState.showSnackbar("Foto guardada en galería de la app") }
+                                    showVistaPrevia = null
+                                } catch (e: IOException) {
+                                    coroutineScope.launch { snackbarHostState.showSnackbar("Error al guardar foto") }
+                                    Log.e("GuardarFoto", "Error al guardar foto en galería interna", e)
                                 }
-                                showVistaPrevia = null
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = WhiteButton, contentColor = BlackText),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Guardar en Galería del Dispositivo")
+                            Text("Guardar Foto")
                         }
                         Spacer(Modifier.height(8.dp))
                         Row(
@@ -720,53 +695,8 @@ fun CherryApp() {
                 }
             }
 
-            // Pantalla de configuración de API
-            if (pantalla == Pantalla.ConfigAPI && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
-                ApiConfigScreen(
-                    onBack = { pantalla = Pantalla.Inicio },
-                    onConfigSuccess = { pantalla = Pantalla.SeleccionPlanta }
-                )
-            }
-
-            // Pantalla de selección de plantas
-            if (pantalla == Pantalla.SeleccionPlanta && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
-                PlantSelectionScreen(
-                    onBack = { pantalla = Pantalla.ConfigAPI },
-                    onPlantSelected = { planta ->
-                        plantaSeleccionada = planta
-                        pantalla = Pantalla.ListaDatosPlanta
-                    }
-                )
-            }
-
-            // Pantalla de listado de datos de planta
-            if (pantalla == Pantalla.ListaDatosPlanta && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
-                plantaSeleccionada?.let { planta ->
-                    DataListScreen(
-                        planta = planta,
-                        onBack = { pantalla = Pantalla.SeleccionPlanta },
-                        onDataSelected = { conjuntoDatos ->
-                            conjuntoDatosSeleccionado = conjuntoDatos
-                            pantalla = Pantalla.GraficosHuerto
-                        }
-                    )
-                }
-            }
-
-            // Pantalla de gráficos
-            if (pantalla == Pantalla.GraficosHuerto && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
-                conjuntoDatosSeleccionado?.let { conjuntoDatos ->
-                    ChartsScreen(
-                        conjuntoDatos = conjuntoDatos,
-                        onBack = { pantalla = Pantalla.ListaDatosPlanta }
-                    )
-                }
-            }
-
-
-
             // --- DIÁLOGOS ---
-            if (showError && error != null) { // Convertido a Snackbar en muchos lugares, pero si aún lo usas:
+            if (showError && error != null) {
                 AlertDialog(
                     onDismissRequest = { showError = false; error = null },
                     title = { Text("Error") },
@@ -786,8 +716,8 @@ fun CherryApp() {
                     confirmButton = {
                         Button(onClick = {
                             if (fileToDelete.delete()) {
-                                fotos = getFotos(FOTOS_DIR) // Actualizar lista
-                                if (imagenSeleccionada == fileToDelete) { // Si estaba en vista completa
+                                fotos = getFotos(FOTOS_DIR)
+                                if (imagenSeleccionada == fileToDelete) {
                                     imagenSeleccionada = null
                                 }
                                 coroutineScope.launch { snackbarHostState.showSnackbar("Foto borrada") }
@@ -811,14 +741,10 @@ fun CherryApp() {
                     confirmButton = {
                         Button(onClick = {
                             showCamaraDialog = false
-                            // Pedir permiso ANTES de abrir la cámara
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                                 showCamaraPersonalizada = true
-                                // Opcional: si la cámara personalizada es una "pantalla"
-                                // pantalla = Pantalla.Camara
                             } else {
                                 requestCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                                // La lógica para abrir la cámara se moverá al callback del permiso
                             }
                         }) { Text("Personalizada") }
                     },
@@ -829,20 +755,17 @@ fun CherryApp() {
                                 abrirCamaraNativa()
                             } else {
                                 requestCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                                // En el callback del permiso, podrías llamar a abrirCamaraNativa()
-                                // o guardar una acción pendiente.
                             }
                         }) { Text("Nativa del Sistema") }
                     },
                     properties = DialogProperties(dismissOnClickOutside = true, dismissOnBackPress = true)
                 )
             }
-            // ... otros diálogos (showGuardarDialog, showSendDialog) si los necesitas
         }
     }
 }
 
-// Asegúrate de que estas funciones estén definidas y sean correctas
+// Funciones auxiliares
 fun parseJson(jsonString: String?): List<Registro> {
     if (jsonString.isNullOrBlank()) {
         Log.w("parseJson", "JSON string es nulo o vacío.")
@@ -850,7 +773,6 @@ fun parseJson(jsonString: String?): List<Registro> {
     }
     val list = mutableListOf<Registro>()
     try {
-        // Intentar parsear como array primero
         try {
             val jsonArray = org.json.JSONArray(jsonString)
             for (i in 0 until jsonArray.length()) {
@@ -861,7 +783,6 @@ fun parseJson(jsonString: String?): List<Registro> {
                 list.add(Registro(temp, hum, lum))
             }
         } catch (e: org.json.JSONException) {
-            // Si no es un array, intentar como objeto con array interno
             val jsonObject = org.json.JSONObject(jsonString)
             if (jsonObject.has("datos")) {
                 val jsonArray = jsonObject.getJSONArray("datos")
@@ -873,7 +794,6 @@ fun parseJson(jsonString: String?): List<Registro> {
                     list.add(Registro(temp, hum, lum))
                 }
             } else {
-                // Si es un objeto simple, intentar extraer los campos directamente
                 val temp = jsonObject.optString("temperatura", "N/A")
                 val hum = jsonObject.optString("humedad", "N/A")
                 val lum = jsonObject.optString("luminosidad", "N/A")
@@ -894,7 +814,6 @@ fun getFotos(directory: File): List<File> {
         Log.w("getFotos", "El directorio no existe o no es un directorio: ${directory.absolutePath}")
         return emptyList()
     }
-    // Filtrar por extensión y asegurarse de que sean archivos
     return directory.listFiles { file ->
         file.isFile && (file.extension.equals("jpg", ignoreCase = true) || file.extension.equals("jpeg", ignoreCase = true))
     }?.sortedDescending()?.toList() ?: emptyList<File>().also {
@@ -928,36 +847,6 @@ suspend fun analizarPlanta(file: File): String? {
     } catch (e: Exception) {
         Log.e("analizarPlanta", "Error al analizar planta", e)
         null
-    }
-}
-
-
-
-// Función para guardar foto en la galería del dispositivo
-fun guardarEnGaleríaDispositivo(context: Context, file: File): Boolean {
-    return try {
-        val contentValues = android.content.ContentValues().apply {
-            put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, file.name)
-            put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CherryApp")
-            }
-        }
-        
-        val resolver = context.contentResolver
-        val uri = resolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
-        
-        uri?.let { 
-            resolver.openOutputStream(it)?.use { output ->
-                file.inputStream().use { input ->
-                    input.copyTo(output)
-                }
-            }
-            true
-        } ?: false
-    } catch (e: Exception) {
-        Log.e("guardarEnGaleríaDispositivo", "Error al guardar en galería", e)
-        false
     }
 }
 
