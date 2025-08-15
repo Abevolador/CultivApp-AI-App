@@ -1,0 +1,17 @@
+[
+  {
+    "temperatura": "25.5°C",
+    "humedad": "65%",
+    "luminosidad": "850 lux"
+  },
+  {
+    "temperatura": "26.2°C",
+    "humedad": "62%",
+    "luminosidad": "920 lux"
+  },
+  {
+    "temperatura": "24.8°C",
+    "humedad": "68%",
+    "luminosidad": "780 lux"
+  }
+] 

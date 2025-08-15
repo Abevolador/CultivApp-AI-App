@@ -1,0 +1,78 @@
+{
+  "plantas": [
+    {
+      "id": "sensor_001",
+      "nombre": "Tomate Cherry 1",
+      "descripcion": "Sensor de temperatura y humedad para tomate cherry"
+    },
+    {
+      "id": "sensor_002",
+      "nombre": "Menta Piperita",
+      "descripcion": "Sensor para planta de menta"
+    },
+    {
+      "id": "sensor_003",
+      "nombre": "Albahaca",
+      "descripcion": "Sensor para planta de albahaca"
+    }
+  ],
+  "conjuntos_datos": {
+    "sensor_001": [
+      {
+        "archivoId": "datos_2023_10_26",
+        "fecha": "2023-10-26",
+        "descripcion": "Datos del 26 de Octubre",
+        "plantaId": "sensor_001"
+      },
+      {
+        "archivoId": "datos_2023_10_25",
+        "fecha": "2023-10-25",
+        "descripcion": "Datos del 25 de Octubre",
+        "plantaId": "sensor_001"
+      }
+    ]
+  },
+  "datos_detallados": {
+    "datos_2023_10_26": {
+      "plantaId": "sensor_001",
+      "archivoId": "datos_2023_10_26",
+      "registros": [
+        {
+          "fecha": "2023-10-26T08:00:00",
+          "temperatura": 25.5,
+          "humedad": 65.2,
+          "luminosidad": 1200.0,
+          "timestamp": 1698314400000
+        },
+        {
+          "fecha": "2023-10-26T09:00:00",
+          "temperatura": 26.1,
+          "humedad": 63.8,
+          "luminosidad": 1350.0,
+          "timestamp": 1698318000000
+        },
+        {
+          "fecha": "2023-10-26T10:00:00",
+          "temperatura": 27.3,
+          "humedad": 61.5,
+          "luminosidad": 1500.0,
+          "timestamp": 1698321600000
+        },
+        {
+          "fecha": "2023-10-26T11:00:00",
+          "temperatura": 28.7,
+          "humedad": 59.2,
+          "luminosidad": 1650.0,
+          "timestamp": 1698325200000
+        },
+        {
+          "fecha": "2023-10-26T12:00:00",
+          "temperatura": 29.2,
+          "humedad": 57.8,
+          "luminosidad": 1800.0,
+          "timestamp": 1698328800000
+        }
+      ]
+    }
+  }
+} 
