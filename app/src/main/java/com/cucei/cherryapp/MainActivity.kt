@@ -115,6 +115,9 @@ sealed class Pantalla {
     object SplashScreen : Pantalla()
     object Bienvenida : Pantalla()
     object Inicio : Pantalla()
+    object ConectarServidor : Pantalla()
+    object ListaPlantasServidor : Pantalla()
+    object DatosPlantaServidor : Pantalla()
     object MostrarDatos : Pantalla()
     object Galeria : Pantalla()
     object Camara : Pantalla()
@@ -144,6 +147,29 @@ data class DiseasePrediction(
     val prediction: String,
     val confidence: Float,
     val preventionMeasures: List<String>
+)
+
+// Datos del servidor
+data class ServerPlant(
+    val plant_id: String,
+    val plant_name: String,
+    val plant_type: String,
+    val plant_date: Long,
+    val plant_registered: Long,
+    val plant_update_poll: Int,
+    val update_poll_activated: Boolean,
+    val device_mac: String,
+    val soil_sens_num: Int
+)
+
+data class ServerPlantData(
+    val plant_id: String,
+    val timestamp: Long,
+    val temperature: String,
+    val relative_humidity: String,
+    val lux: String,
+    val moisture_value: String,
+    val sensor_num: String
 )
 
 // MainActivity
@@ -209,10 +235,14 @@ fun CherryApp() {
     var imagenRealAnalysis by remember { mutableStateOf<File?>(null) }
     var realAnalysisResult by remember { mutableStateOf<DiseasePrediction?>(null) }
     
+    // --- Estado para Conectar al servidor ---
+    var serverInput by remember { mutableStateOf("") } // Ej: 192.168.100.26:2000
+    var recentServers by remember { mutableStateOf<List<String>>(emptyList()) }
+    var serverPlants by remember { mutableStateOf<List<ServerPlant>>(emptyList()) }
+    var selectedPlantId by remember { mutableStateOf<String?>(null) }
+    var serverPlantData by remember { mutableStateOf<List<ServerPlantData>>(emptyList()) }
+    var isConnecting by remember { mutableStateOf(false) }
 
-    
-
-    
     // Navigation Drawer state
     var drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     var scope = rememberCoroutineScope()
@@ -277,6 +307,12 @@ fun CherryApp() {
                 description = "Pantalla principal de la aplicación"
             ),
             DrawerItem(
+                title = "Conectar al servidor",
+                icon = { Icon(Icons.Filled.Info, contentDescription = null) },
+                screen = Pantalla.ConectarServidor,
+                description = "Configura la conexión con el servidor"
+            ),
+            DrawerItem(
                 title = "Tomar Foto",
                 icon = { Icon(Icons.Filled.Camera, contentDescription = null) },
                 screen = Pantalla.AnalisisPlanta,
@@ -324,13 +360,17 @@ fun CherryApp() {
                     backPressedTime = System.currentTimeMillis()
                 }
             }
-            Pantalla.Galeria, Pantalla.MostrarDatos, Pantalla.DatosPlantas, Pantalla.Graficos -> {
+            Pantalla.Galeria, Pantalla.MostrarDatos, Pantalla.DatosPlantas, Pantalla.Graficos, Pantalla.ConectarServidor, Pantalla.ListaPlantasServidor -> {
                 Log.d("BackHandler", "Principal: Volviendo a Inicio desde $pantalla")
                 pantalla = Pantalla.Inicio
             }
             Pantalla.AnalisisPlanta -> {
                 Log.d("BackHandler", "Principal: Volviendo a Inicio desde Análisis de Plantas")
                 pantalla = Pantalla.Inicio
+            }
+            Pantalla.DatosPlantaServidor -> {
+                Log.d("BackHandler", "Volviendo a lista de plantas del servidor")
+                pantalla = Pantalla.ListaPlantasServidor
             }
             else -> {
                 Log.d("BackHandler", "Principal: Estado no manejado - $pantalla")
@@ -581,6 +621,9 @@ fun CherryApp() {
                                 Pantalla.SplashScreen -> "CultivApp"
                                 Pantalla.Bienvenida -> "CultivApp"
                                 Pantalla.Inicio -> "Inicio"
+                                Pantalla.ConectarServidor -> "Conectar al servidor"
+                                Pantalla.ListaPlantasServidor -> "Plantas (Servidor)"
+                                Pantalla.DatosPlantaServidor -> "Datos de la planta"
                                 Pantalla.AnalisisPlanta -> "Análisis de Plantas"
                                 Pantalla.Galeria -> "Galería"
                                 Pantalla.MostrarDatos -> "Datos JSON"
@@ -791,6 +834,242 @@ fun CherryApp() {
                                 Text("🖼️ Ver Galería: Visualiza las fotos que has tomado")
                                 Text("📂 Cargar Datos (JSON): Carga y visualiza tus registros")
                                 Text("📊 Datos de Plantas: Gestiona datos de plantas y gráficos")
+                            }
+                        }
+                    }
+                }
+
+                // Lista de plantas del servidor
+                if (pantalla == Pantalla.ListaPlantasServidor && serverInput.isNotBlank()) {
+                    LaunchedEffect(serverInput) {
+                        isConnecting = true
+                        try {
+                            val url = java.net.URL("http://" + serverInput + "/plant")
+                            val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+                                requestMethod = "GET"
+                                connectTimeout = 5000
+                                readTimeout = 5000
+                            }
+                            val code = conn.responseCode
+                            if (code == 200) {
+                                val body = conn.inputStream.bufferedReader().readText()
+                                val json = org.json.JSONArray(body)
+                                val items = mutableListOf<ServerPlant>()
+                                for (i in 0 until json.length()) {
+                                    val o = json.getJSONObject(i)
+                                    items.add(
+                                        ServerPlant(
+                                            plant_id = o.optString("plant_id"),
+                                            plant_name = o.optString("plant_name"),
+                                            plant_type = o.optString("plant_type"),
+                                            plant_date = o.optLong("plant_date"),
+                                            plant_registered = o.optLong("plant_registered"),
+                                            plant_update_poll = o.optInt("plant_update_poll"),
+                                            update_poll_activated = o.optBoolean("update_poll_activated"),
+                                            device_mac = o.optString("device_mac"),
+                                            soil_sens_num = o.optInt("soil_sens_num")
+                                        )
+                                    )
+                                }
+                                serverPlants = items
+                            } else {
+                                serverPlants = emptyList()
+                            }
+                        } catch (e: Exception) {
+                            Log.e("Server", "Error obteniendo /plant", e)
+                            serverPlants = emptyList()
+                        } finally {
+                            isConnecting = false
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp)
+                    ) {
+                        if (isConnecting) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        } else if (serverPlants.isEmpty()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("Sin plantas o error de conexión")
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(serverPlants.size) { idx ->
+                                    val p = serverPlants[idx]
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                selectedPlantId = p.plant_id
+                                                pantalla = Pantalla.DatosPlantaServidor
+                                            },
+                                        elevation = CardDefaults.cardElevation(4.dp),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(Modifier.padding(16.dp)) {
+                                            Text(p.plant_name, fontWeight = FontWeight.Bold)
+                                            Text("${p.plant_type} • ID: ${p.plant_id}", fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Datos de la planta elegida (filtrando /plant_data)
+                if (pantalla == Pantalla.DatosPlantaServidor && selectedPlantId != null && serverInput.isNotBlank()) {
+                    val selId = selectedPlantId!!
+                    LaunchedEffect(selId) {
+                        isConnecting = true
+                        try {
+                            val url = java.net.URL("http://" + serverInput + "/plant_data")
+                            val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+                                requestMethod = "GET"
+                                connectTimeout = 7000
+                                readTimeout = 7000
+                            }
+                            val code = conn.responseCode
+                            if (code == 200) {
+                                val body = conn.inputStream.bufferedReader().readText()
+                                val json = org.json.JSONArray(body)
+                                val items = mutableListOf<ServerPlantData>()
+                                for (i in 0 until json.length()) {
+                                    val o = json.getJSONObject(i)
+                                    if (o.optString("plant_id") == selId) {
+                                        items.add(
+                                            ServerPlantData(
+                                                plant_id = o.optString("plant_id"),
+                                                timestamp = o.optLong("timestamp"),
+                                                temperature = o.optString("temperature"),
+                                                relative_humidity = o.optString("relative_humidity"),
+                                                lux = o.optString("lux"),
+                                                moisture_value = o.optString("moisture_value"),
+                                                sensor_num = o.optString("sensor_num")
+                                            )
+                                        )
+                                    }
+                                }
+                                // Ordenar por timestamp asc/desc si se quiere
+                                serverPlantData = items.sortedBy { it.timestamp }
+                            } else {
+                                serverPlantData = emptyList()
+                            }
+                        } catch (e: Exception) {
+                            Log.e("Server", "Error obteniendo /plant_data", e)
+                            serverPlantData = emptyList()
+                        } finally {
+                            isConnecting = false
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp)
+                    ) {
+                        if (isConnecting) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        } else if (serverPlantData.isEmpty()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("Sin registros para esta planta")
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(serverPlantData.size) { idx ->
+                                    val r = serverPlantData[idx]
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        elevation = CardDefaults.cardElevation(4.dp),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(Modifier.padding(16.dp)) {
+                                            Text("Timestamp: ${r.timestamp}", fontWeight = FontWeight.Bold)
+                                            Text("Temp: ${r.temperature} °C • HR: ${r.relative_humidity} %")
+                                            Text("Lux: ${r.lux} • Humedad suelo: ${r.moisture_value}")
+                                            Text("Sensor: ${r.sensor_num}", fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Pantalla: Conectar al servidor
+                if (pantalla == Pantalla.ConectarServidor && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Huertos",
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
+
+                        // Input IP:PUERTO
+                        OutlinedTextField(
+                            value = serverInput,
+                            onValueChange = { serverInput = it.trim() },
+                            label = { Text("IP:PUERTO (ej. 192.168.100.26:2000)") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                        )
+
+                        // Botón conectar
+                        val canConnect = remember(serverInput) {
+                            serverInput.contains(":") && serverInput.split(":").size == 2 && serverInput.split(":")[1].all { it.isDigit() }
+                        }
+
+                        Button(
+                            onClick = {
+                                if (!recentServers.contains(serverInput)) {
+                                    recentServers = (listOf(serverInput) + recentServers).take(5)
+                                }
+                                // Navegar a lista (la carga real se hará ahí)
+                                pantalla = Pantalla.ListaPlantasServidor
+                            },
+                            enabled = canConnect,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(52.dp)
+                                .padding(top = 8.dp),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Text(if (canConnect) "Conectar al servidor" else "Escribe IP y puerto")
+                        }
+
+                        // Recientes
+                        if (recentServers.isNotEmpty()) {
+                            Spacer(Modifier.height(16.dp))
+                            Text("Conexiones recientes", fontWeight = FontWeight.Medium)
+                            Spacer(Modifier.height(8.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                recentServers.forEach { addr ->
+                                    OutlinedButton(
+                                        onClick = { serverInput = addr },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) { Text(addr) }
+                                }
                             }
                         }
                     }
