@@ -45,6 +45,8 @@ fun PlantDataScreen(
     val records by viewModel.records.collectAsState()
     val groupedData by viewModel.groupedData.collectAsState()
     
+
+    
     // Launcher para seleccionar archivo CSV (más flexible)
     val csvLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -71,31 +73,7 @@ fun PlantDataScreen(
     
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Datos de Plantas") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Volver")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { csvLauncher.launch("*/*") }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Cargar CSV")
-                    }
-                }
-            )
-        },
-        floatingActionButton = {
-            // Botón de gráficos (solo visible si hay datos)
-            if (state is PlantDataState.Success && records.isNotEmpty()) {
-                FloatingActionButton(
-                    onClick = onNavigateToCharts,
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
-                ) {
-                    Icon(Icons.Default.BarChart, contentDescription = "Ver Gráficos")
-                }
-            }
+            // Sin TopAppBar para eliminar el header
         }
     ) { padding ->
         Column(
@@ -155,13 +133,69 @@ fun PlantDataScreen(
                     }
                     
                     is PlantDataState.Success -> {
+                        // Botones de acción en la parte superior
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            // Botón de gráficos
+                            Button(
+                                onClick = onNavigateToCharts,
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.secondary,
+                                    contentColor = MaterialTheme.colorScheme.onSecondary
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.BarChart,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Gráficos", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                            
+                            // Botón de recargar
+                            Button(
+                                onClick = { csvLauncher.launch("*/*") },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.tertiary,
+                                    contentColor = MaterialTheme.colorScheme.onTertiary
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.Refresh,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Recargar", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
+                        
                         // Estadísticas
                         StatisticsCard(statistics = currentState.statistics)
                         
                         // Lista agrupada de registros
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(16.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             groupedData?.let { groups ->

@@ -20,6 +20,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Camera
+import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.filled.FlashAuto
+
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -54,6 +58,8 @@ fun CameraScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var isTakingPhoto by remember { mutableStateOf(false) }
     var camera by remember { mutableStateOf<Camera?>(null) }
+    var flashMode by remember { mutableStateOf(ImageCapture.FLASH_MODE_OFF) }
+    var hasFlash by remember { mutableStateOf(false) }
 
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
     val imageCapture = remember { 
@@ -78,7 +84,7 @@ fun CameraScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Escaneo Enfocado") },
+                title = { Text("Fotografia la hoja") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Volver")
@@ -99,8 +105,8 @@ fun CameraScreen(
             ) {
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
+                        .fillMaxWidth()
+                        .weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
@@ -109,7 +115,10 @@ fun CameraScreen(
                             imageCapture = imageCapture,
                             cameraExecutor = cameraExecutor,
                             lifecycleOwner = lifecycleOwner,
-                            onCameraReady = { cam -> camera = cam }
+                            onCameraReady = { cam -> 
+                                camera = cam
+                                hasFlash = cam.cameraInfo.hasFlashUnit()
+                            }
                         )
                         
                         // Capa semitransparente oscura
@@ -122,7 +131,7 @@ fun CameraScreen(
                         // Recuadro de enfoque central
                         Box(
                             modifier = Modifier
-                                .size(280.dp)
+                                .size(252.dp)
                                 .border(
                                     width = 3.dp,
                                     color = Color.White,
@@ -160,8 +169,11 @@ fun CameraScreen(
                         .background(Color.Black.copy(alpha = 0.8f))
                         .padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
+                    // Espaciador para centrar el botón de captura
+                    Spacer(modifier = Modifier.width(80.dp))
+                    
                     // Botón de captura
                     Button(
                         onClick = {
@@ -173,10 +185,18 @@ fun CameraScreen(
                                     cameraExecutor = cameraExecutor,
                                     onPhotoReady = { file ->
                                         isTakingPhoto = false
+                                        // Apagar el flash después de tomar la foto
+                                        if (flashMode == ImageCapture.FLASH_MODE_ON) {
+                                            camera?.cameraControl?.enableTorch(false)
+                                        }
                                         onPhotoTaken(file)
                                     },
                                     onError = { errorMsg ->
                                         isTakingPhoto = false
+                                        // Apagar el flash en caso de error también
+                                        if (flashMode == ImageCapture.FLASH_MODE_ON) {
+                                            camera?.cameraControl?.enableTorch(false)
+                                        }
                                         error = errorMsg
                                     }
                                 )
@@ -202,6 +222,36 @@ fun CameraScreen(
                                 modifier = Modifier.size(40.dp)
                             )
                         }
+                    }
+                    
+                    // Botón de flash (solo encendido/apagado)
+                    IconButton(
+                        onClick = {
+                            flashMode = if (flashMode == ImageCapture.FLASH_MODE_OFF) {
+                                ImageCapture.FLASH_MODE_ON
+                            } else {
+                                ImageCapture.FLASH_MODE_OFF
+                            }
+                            // Aplicar flash mode a la cámara
+                            camera?.cameraControl?.enableTorch(flashMode == ImageCapture.FLASH_MODE_ON)
+                        },
+                        enabled = hasFlash,
+                        modifier = Modifier
+                            .size(60.dp)
+                            .background(
+                                if (flashMode == ImageCapture.FLASH_MODE_ON) 
+                                    Color.White.copy(alpha = 0.2f) 
+                                else 
+                                    Color.Transparent,
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            if (flashMode == ImageCapture.FLASH_MODE_OFF) Icons.Default.FlashOff else Icons.Default.FlashOn,
+                            contentDescription = "Flash",
+                            tint = if (hasFlash) Color.White else Color.White.copy(alpha = 0.3f),
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
                 }
             }
@@ -240,7 +290,6 @@ fun CameraPreview(
         },
         modifier = Modifier
             .fillMaxSize()
-            .aspectRatio(1f) // Vista cuadrada
             .clip(RoundedCornerShape(16.dp))
             .border(4.dp, Color.White, RoundedCornerShape(16.dp)),
         update = { previewView ->
@@ -268,6 +317,9 @@ fun CameraPreview(
                     // Configurar autoenfoque continuo en el área central
                     camera.cameraControl.enableTorch(false)
                     camera.cameraControl.setLinearZoom(0f)
+                    
+                    // Detectar si el dispositivo tiene flash
+                    onCameraReady(camera)
                     
                     // Configurar autoenfoque continuo en el área central
                     try {
@@ -300,6 +352,8 @@ fun CameraPreview(
     )
 }
 
+
+
 fun takeFocusedPhoto(
     context: Context,
     imageCapture: ImageCapture,
@@ -321,16 +375,17 @@ fun takeFocusedPhoto(
                 try {
                     val originalBitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
                     if (originalBitmap != null) {
-                        // Calcular el área de recorte central (recuadro de enfoque)
-                        val size = minOf(originalBitmap.width, originalBitmap.height)
-                        val x = (originalBitmap.width - size) / 2
-                        val y = (originalBitmap.height - size) / 2
+                        // Calcular el área de recorte del recuadro de enfoque (252dp)
+                        // El recuadro ocupa aproximadamente el 90% del área central
+                        val cropSize = (minOf(originalBitmap.width, originalBitmap.height) * 0.9).toInt()
+                        val x = (originalBitmap.width - cropSize) / 2
+                        val y = (originalBitmap.height - cropSize) / 2
                         
-                        // Recortar la imagen al área central
-                        val croppedBitmap = Bitmap.createBitmap(originalBitmap, x, y, size, size)
+                        // Recortar la imagen al área del recuadro
+                        val croppedBitmap = Bitmap.createBitmap(originalBitmap, x, y, cropSize, cropSize)
                         
-                        // Redimensionar a 512x512
-                        val finalBitmap = Bitmap.createScaledBitmap(croppedBitmap, 512, 512, true)
+                        // Redimensionar a 256x256
+                        val finalBitmap = Bitmap.createScaledBitmap(croppedBitmap, 256, 256, true)
                         
                         // Guardar la imagen final
                         val outputStream = photoFile.outputStream()
