@@ -110,6 +110,14 @@ import com.cucei.cherryapp.ui.theme.BlackText
 import com.cucei.cherryapp.ui.theme.DarkButton
 import com.cucei.cherryapp.ui.theme.WhiteText
 
+// Importar funciones del ServerConnection.kt
+import com.cucei.cherryapp.getServerPlants
+import com.cucei.cherryapp.getServerPlantData
+import com.cucei.cherryapp.testServerConnection
+import com.cucei.cherryapp.ConectarServidorScreen
+import com.cucei.cherryapp.ListaPlantasServidorScreen
+import com.cucei.cherryapp.DatosPlantaServidorScreen
+
 // Sealed class Pantalla actualizada
 sealed class Pantalla {
     object SplashScreen : Pantalla()
@@ -149,28 +157,7 @@ data class DiseasePrediction(
     val preventionMeasures: List<String>
 )
 
-// Datos del servidor
-data class ServerPlant(
-    val plant_id: String,
-    val plant_name: String,
-    val plant_type: String,
-    val plant_date: Long,
-    val plant_registered: Long,
-    val plant_update_poll: Int,
-    val update_poll_activated: Boolean,
-    val device_mac: String,
-    val soil_sens_num: Int
-)
-
-data class ServerPlantData(
-    val plant_id: String,
-    val timestamp: Long,
-    val temperature: String,
-    val relative_humidity: String,
-    val lux: String,
-    val moisture_value: String,
-    val sensor_num: String
-)
+// Las data classes ServerPlant y ServerPlantData están definidas en ServerConnection.kt
 
 // MainActivity
 class MainActivity : ComponentActivity() {
@@ -252,6 +239,20 @@ fun CherryApp() {
     
     // TensorFlow Lite interpreter
     val tensorFlowInterpreter = remember { loadTensorFlowModel(context) }
+    
+    // Funciones para persistir IPs recientes
+    fun saveRecentServers(servers: List<String>) {
+        val sharedPrefs = context.getSharedPreferences("CultivAppPrefs", Context.MODE_PRIVATE)
+        val editor = sharedPrefs.edit()
+        editor.putStringSet("recent_servers", servers.toSet())
+        editor.apply()
+    }
+    
+    fun loadRecentServers(): List<String> {
+        val sharedPrefs = context.getSharedPreferences("CultivAppPrefs", Context.MODE_PRIVATE)
+        val serversSet = sharedPrefs.getStringSet("recent_servers", emptySet()) ?: emptySet()
+        return serversSet.toList()
+    }
 
     // Para el doble toque para salir y Snackbar
     var backPressedTime by remember { mutableStateOf(0L) }
@@ -293,6 +294,11 @@ fun CherryApp() {
             delay(500) // Tiempo para la animación de fade-out
             pantalla = Pantalla.Inicio
         }
+    }
+    
+    // Efecto para cargar IPs recientes al iniciar
+    LaunchedEffect(Unit) {
+        recentServers = loadRecentServers()
     }
     
 
@@ -830,6 +836,7 @@ fun CherryApp() {
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(bottom = 8.dp)
                                 )
+                                Text("🌐 Conectar al Servidor: Conecta con tu base de datos local")
                                 Text("📸 Tomar Foto: Captura imágenes con la cámara")
                                 Text("🖼️ Ver Galería: Visualiza las fotos que has tomado")
                                 Text("📂 Cargar Datos (JSON): Carga y visualiza tus registros")
@@ -839,240 +846,97 @@ fun CherryApp() {
                     }
                 }
 
-                // Lista de plantas del servidor
+                // Lista de plantas del servidor (usando ServerConnection.kt)
                 if (pantalla == Pantalla.ListaPlantasServidor && serverInput.isNotBlank()) {
                     LaunchedEffect(serverInput) {
                         isConnecting = true
                         try {
-                            val url = java.net.URL("http://" + serverInput + "/plant")
-                            val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
-                                requestMethod = "GET"
-                                connectTimeout = 5000
-                                readTimeout = 5000
-                            }
-                            val code = conn.responseCode
-                            if (code == 200) {
-                                val body = conn.inputStream.bufferedReader().readText()
-                                val json = org.json.JSONArray(body)
-                                val items = mutableListOf<ServerPlant>()
-                                for (i in 0 until json.length()) {
-                                    val o = json.getJSONObject(i)
-                                    items.add(
-                                        ServerPlant(
-                                            plant_id = o.optString("plant_id"),
-                                            plant_name = o.optString("plant_name"),
-                                            plant_type = o.optString("plant_type"),
-                                            plant_date = o.optLong("plant_date"),
-                                            plant_registered = o.optLong("plant_registered"),
-                                            plant_update_poll = o.optInt("plant_update_poll"),
-                                            update_poll_activated = o.optBoolean("update_poll_activated"),
-                                            device_mac = o.optString("device_mac"),
-                                            soil_sens_num = o.optInt("soil_sens_num")
-                                        )
-                                    )
-                                }
-                                serverPlants = items
-                            } else {
-                                serverPlants = emptyList()
-                            }
+                            serverPlants = getServerPlants(serverInput)
                         } catch (e: Exception) {
-                            Log.e("Server", "Error obteniendo /plant", e)
+                            Log.e("Server", "Error obteniendo plantas", e)
                             serverPlants = emptyList()
                         } finally {
                             isConnecting = false
                         }
                     }
 
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp)
-                    ) {
-                        if (isConnecting) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator()
-                            }
-                        } else if (serverPlants.isEmpty()) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("Sin plantas o error de conexión")
-                            }
-                        } else {
-                            LazyColumn(
-                                modifier = Modifier.fillMaxSize(),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(serverPlants.size) { idx ->
-                                    val p = serverPlants[idx]
-                                    Card(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                selectedPlantId = p.plant_id
+                    ListaPlantasServidorScreen(
+                        serverInput = serverInput,
+                        serverPlants = serverPlants,
+                        isConnecting = isConnecting,
+                        onPlantClick = { plantId ->
+                            selectedPlantId = plantId
                                                 pantalla = Pantalla.DatosPlantaServidor
-                                            },
-                                        elevation = CardDefaults.cardElevation(4.dp),
-                                        shape = RoundedCornerShape(12.dp)
-                                    ) {
-                                        Column(Modifier.padding(16.dp)) {
-                                            Text(p.plant_name, fontWeight = FontWeight.Bold)
-                                            Text("${p.plant_type} • ID: ${p.plant_id}", fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-                            }
                         }
-                    }
+                    )
                 }
 
-                // Datos de la planta elegida (filtrando /plant_data)
+// Datos de la planta elegida (filtrando /plant_data)
                 if (pantalla == Pantalla.DatosPlantaServidor && selectedPlantId != null && serverInput.isNotBlank()) {
                     val selId = selectedPlantId!!
                     LaunchedEffect(selId) {
                         isConnecting = true
                         try {
-                            val url = java.net.URL("http://" + serverInput + "/plant_data")
-                            val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
-                                requestMethod = "GET"
-                                connectTimeout = 7000
-                                readTimeout = 7000
-                            }
-                            val code = conn.responseCode
-                            if (code == 200) {
-                                val body = conn.inputStream.bufferedReader().readText()
-                                val json = org.json.JSONArray(body)
-                                val items = mutableListOf<ServerPlantData>()
-                                for (i in 0 until json.length()) {
-                                    val o = json.getJSONObject(i)
-                                    if (o.optString("plant_id") == selId) {
-                                        items.add(
-                                            ServerPlantData(
-                                                plant_id = o.optString("plant_id"),
-                                                timestamp = o.optLong("timestamp"),
-                                                temperature = o.optString("temperature"),
-                                                relative_humidity = o.optString("relative_humidity"),
-                                                lux = o.optString("lux"),
-                                                moisture_value = o.optString("moisture_value"),
-                                                sensor_num = o.optString("sensor_num")
-                                            )
-                                        )
-                                    }
-                                }
-                                // Ordenar por timestamp asc/desc si se quiere
-                                serverPlantData = items.sortedBy { it.timestamp }
-                            } else {
-                                serverPlantData = emptyList()
-                            }
+                            serverPlantData = getServerPlantData(serverInput, selId)
                         } catch (e: Exception) {
-                            Log.e("Server", "Error obteniendo /plant_data", e)
+                            Log.e("Server", "Error obteniendo datos de planta", e)
                             serverPlantData = emptyList()
                         } finally {
                             isConnecting = false
                         }
                     }
 
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp)
-                    ) {
-                        if (isConnecting) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator()
-                            }
-                        } else if (serverPlantData.isEmpty()) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("Sin registros para esta planta")
-                            }
-                        } else {
-                            LazyColumn(
-                                modifier = Modifier.fillMaxSize(),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(serverPlantData.size) { idx ->
-                                    val r = serverPlantData[idx]
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        elevation = CardDefaults.cardElevation(4.dp),
-                                        shape = RoundedCornerShape(12.dp)
-                                    ) {
-                                        Column(Modifier.padding(16.dp)) {
-                                            Text("Timestamp: ${r.timestamp}", fontWeight = FontWeight.Bold)
-                                            Text("Temp: ${r.temperature} °C • HR: ${r.relative_humidity} %")
-                                            Text("Lux: ${r.lux} • Humedad suelo: ${r.moisture_value}")
-                                            Text("Sensor: ${r.sensor_num}", fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    DatosPlantaServidorScreen(
+                        serverInput = serverInput,
+                        selectedPlantId = selectedPlantId,
+                        serverPlantData = serverPlantData,
+                        isConnecting = isConnecting
+                    )
                 }
 
                 // Pantalla: Conectar al servidor
                 if (pantalla == Pantalla.ConectarServidor && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "Huertos",
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(bottom = 16.dp)
-                        )
-
-                        // Input IP:PUERTO
-                        OutlinedTextField(
-                            value = serverInput,
-                            onValueChange = { serverInput = it.trim() },
-                            label = { Text("IP:PUERTO (ej. 192.168.100.26:2000)") },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp)
-                        )
-
-                        // Botón conectar
-                        val canConnect = remember(serverInput) {
-                            serverInput.contains(":") && serverInput.split(":").size == 2 && serverInput.split(":")[1].all { it.isDigit() }
-                        }
-
-                        Button(
-                            onClick = {
-                                if (!recentServers.contains(serverInput)) {
-                                    recentServers = (listOf(serverInput) + recentServers).take(5)
-                                }
-                                // Navegar a lista (la carga real se hará ahí)
-                                pantalla = Pantalla.ListaPlantasServidor
-                            },
-                            enabled = canConnect,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp)
-                                .padding(top = 8.dp),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text(if (canConnect) "Conectar al servidor" else "Escribe IP y puerto")
-                        }
-
-                        // Recientes
-                        if (recentServers.isNotEmpty()) {
-                            Spacer(Modifier.height(16.dp))
-                            Text("Conexiones recientes", fontWeight = FontWeight.Medium)
-                            Spacer(Modifier.height(8.dp))
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                recentServers.forEach { addr ->
-                                    OutlinedButton(
-                                        onClick = { serverInput = addr },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(12.dp)
-                                    ) { Text(addr) }
+                    ConectarServidorScreen(
+                        serverInput = serverInput,
+                        onServerInputChange = { serverInput = it },
+                        recentServers = recentServers,
+                        onRecentServerClick = { addr -> 
+                            if (addr.isEmpty()) {
+                                // Limpiar todas las IPs recientes
+                                recentServers = emptyList()
+                                saveRecentServers(recentServers)
+                            } else if (addr.startsWith("DELETE:")) {
+                                // Eliminar una IP específica
+                                val ipToDelete = addr.substring(7) // Remover "DELETE:" del inicio
+                                recentServers = recentServers.filter { it != ipToDelete }
+                                saveRecentServers(recentServers)
+                            } else {
+                                // Seleccionar una IP para conectar
+                                serverInput = addr
+                                if (!recentServers.contains(addr)) {
+                                    recentServers = (listOf(addr) + recentServers).take(5)
+                                    saveRecentServers(recentServers)
                                 }
                             }
-                        }
-                    }
+                        },
+                        onConnectClick = {
+                                if (!recentServers.contains(serverInput)) {
+                                    recentServers = (listOf(serverInput) + recentServers).take(5)
+                                saveRecentServers(recentServers)
+                                }
+                                pantalla = Pantalla.ListaPlantasServidor
+                            },
+                        onTestConnection = {
+                            // Implementar prueba de conexión
+                                    coroutineScope.launch {
+                                val result = testServerConnection(serverInput)
+                                            snackbarHostState.showSnackbar(result)
+                            }
+                        },
+                        canConnect = serverInput.contains(":") &&
+                                    serverInput.split(":").size == 2 &&
+                                    serverInput.split(":")[1].all { it.isDigit() }
+                    )
                 }
 
                 // Pantalla de cámara personalizada
