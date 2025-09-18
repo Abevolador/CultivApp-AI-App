@@ -19,6 +19,11 @@ import android.util.Log
 import android.content.Context
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.Delete
 
 // Data classes para el servidor
 data class ServerPlant(
@@ -52,7 +57,10 @@ fun ConectarServidorScreen(
     onRecentServerClick: (String) -> Unit,
     onConnectClick: () -> Unit,
     onTestConnection: () -> Unit,
-    canConnect: Boolean
+    canConnect: Boolean,
+    huertosGuardados: List<HuertoGuardado> = emptyList(),
+    onHuertoClick: (String) -> Unit = {},
+    onEditarHuerto: (HuertoGuardado) -> Unit = {}
 ) {
     val context = LocalContext.current
     var showNetworkInfo by remember { mutableStateOf(false) }
@@ -158,61 +166,160 @@ fun ConectarServidorScreen(
             Text(if (canConnect) "Conectar al servidor" else "Escribe IP y puerto")
         }
 
-        // Lista de recientes
-        if (recentServers.isNotEmpty()) {
+        // Lista de huertos guardados
+        if (huertosGuardados.isNotEmpty()) {
             Spacer(modifier = Modifier.height(16.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Conexiones recientes", fontWeight = FontWeight.Medium)
-                TextButton(
-                    onClick = { 
-                        // Limpiar todas las IPs recientes
-                        onRecentServerClick("") // Enviar string vacío como señal para limpiar todas
-                    },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Text("🗑️ Limpiar Todas", fontSize = 12.sp)
+            Text(
+                "🌱 Huertos Guardados", 
+                fontWeight = FontWeight.Medium,
+                fontSize = 16.sp,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                huertosGuardados.forEach { huerto ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                        ),
+                        elevation = CardDefaults.cardElevation(4.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("🌱", fontSize = 24.sp)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { onHuertoClick("${huerto.ip}:${huerto.puerto}") }
+                            ) {
+                                Text(
+                                    huerto.nombre,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                                Text(
+                                    "${huerto.ip}:${huerto.puerto}",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                )
+                                Text(
+                                    "Última conexión: ${formatearFecha(huerto.ultimaConexion)}",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                )
+                            }
+                            IconButton(
+                                onClick = { onEditarHuerto(huerto) },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Edit,
+                                    contentDescription = "Editar huerto",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                recentServers.forEach { addr ->
+        }
+
+        // Combobox de conexiones recientes
+        if (recentServers.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(16.dp))
+            var expanded by remember { mutableStateOf(false) }
+            
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                ),
+                elevation = CardDefaults.cardElevation(2.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column {
+                    // Header del combobox
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { expanded = !expanded }
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Botón principal de la IP (expandible)
-                        OutlinedButton(
-                            onClick = { onRecentServerClick(addr) },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp)
-                        ) { 
-                            Text(addr, fontSize = 14.sp) 
-                        }
-                        
-                        Spacer(modifier = Modifier.width(8.dp))
-                        
-                        // Botón de bote de basura individual
-                        IconButton(
-                            onClick = { 
-                                // Enviar señal para eliminar esta IP específica
-                                onRecentServerClick("DELETE:$addr")
-                            },
-                            modifier = Modifier.size(40.dp),
-                            colors = IconButtonDefaults.iconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f),
-                                contentColor = MaterialTheme.colorScheme.error
-                            )
-                        ) {
-                            Text(
-                                "🗑️",
-                                fontSize = 16.sp
-                            )
+                        Text(
+                            "📋 Conexiones Recientes (${recentServers.size})",
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp
+                        )
+                        Icon(
+                            if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                            contentDescription = if (expanded) "Contraer" else "Expandir",
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                    
+                    // Lista expandible
+                    if (expanded) {
+                        Divider()
+                        Column {
+                            recentServers.forEach { addr ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { 
+                                            onRecentServerClick(addr)
+                                            expanded = false
+                                        }
+                                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        addr,
+                                        fontSize = 14.sp,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = { 
+                                            onRecentServerClick("DELETE:$addr")
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Delete,
+                                            contentDescription = "Eliminar",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                                if (addr != recentServers.last()) {
+                                    Divider(modifier = Modifier.padding(horizontal = 16.dp))
+                                }
+                            }
+                            
+                            // Botón limpiar todas
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { 
+                                        onRecentServerClick("")
+                                        expanded = false
+                                    }
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "🗑️ Limpiar Todas",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     }
                 }
@@ -828,4 +935,11 @@ suspend fun testServerConnection(serverInput: String): String {
             "❌ $errorMessage"
         }
     }
+}
+
+// Función para formatear fechas
+fun formatearFecha(timestamp: Long): String {
+    val fecha = java.util.Date(timestamp)
+    val formatter = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale("es", "MX"))
+    return formatter.format(fecha)
 }

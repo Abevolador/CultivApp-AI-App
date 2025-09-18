@@ -1,42 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Configuración universal para redes locales -->
-    <domain-config cleartextTrafficPermitted="true">
-        <!-- Permitir tráfico HTTP a cualquier red local -->
-        <domain-config cleartextTrafficPermitted="true">
-            <!-- Redes clase A (10.x.x.x) - Universidades, corporaciones -->
-            <domain includeSubdomains="true">10.0.0.0/8</domain>
-        </domain-config>
-        
-        <domain-config cleartextTrafficPermitted="true">
-            <!-- Redes clase B (172.16.x.x - 172.31.x.x) - Laboratorios, universidades -->
-            <domain includeSubdomains="true">172.16.0.0/12</domain>
-        </domain-config>
-        
-        <domain-config cleartextTrafficPermitted="true">
-            <!-- Redes clase C (192.168.x.x) - Casas, oficinas pequeñas -->
-            <domain includeSubdomains="true">192.168.0.0/16</domain>
-        </domain-config>
-        
-        <domain-config cleartextTrafficPermitted="true">
-            <!-- Redes de enlace local -->
-            <domain includeSubdomains="true">169.254.0.0/16</domain>
-        </domain-config>
-        
-        <!-- Permitir tráfico HTTP a localhost -->
-        <domain-config cleartextTrafficPermitted="true">
-            <domain includeSubdomains="true">localhost</domain>
-            <domain includeSubdomains="true">127.0.0.1</domain>
-        </domain-config>
-        
-        <!-- IPs específicas conocidas -->
-        <domain includeSubdomains="false">192.168.50.3</domain>
-        <domain includeSubdomains="false">192.168.1.100</domain>
-        <domain includeSubdomains="false">192.168.100.26</domain>
-    </domain-config>
-    
-    <!-- Configuración por defecto para el resto de dominios -->
-    <base-config cleartextTrafficPermitted="false">
+    <!-- Permitir HTTP en todas las conexiones -->
+    <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system"/>
         </trust-anchors>

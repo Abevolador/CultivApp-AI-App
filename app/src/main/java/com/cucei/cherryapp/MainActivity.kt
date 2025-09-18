@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.RotateLeft
 import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.draw.alpha
@@ -98,9 +99,23 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import android.graphics.Bitmap
 import androidx.compose.runtime.getValue
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import android.content.SharedPreferences
+import java.util.UUID
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.Canvas
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.drawscope.draw
+import androidx.compose.ui.graphics.asAndroidBitmap
 import com.cucei.cherryapp.ui.CameraScreen
 import com.cucei.cherryapp.ui.PlantDataScreen
 import com.cucei.cherryapp.ui.ChartsScreen
@@ -121,14 +136,12 @@ import com.cucei.cherryapp.DatosPlantaServidorScreen
 // Sealed class Pantalla actualizada
 sealed class Pantalla {
     object SplashScreen : Pantalla()
-    object Bienvenida : Pantalla()
     object Inicio : Pantalla()
     object ConectarServidor : Pantalla()
     object ListaPlantasServidor : Pantalla()
     object DatosPlantaServidor : Pantalla()
     object MostrarDatos : Pantalla()
     object Galeria : Pantalla()
-    object Camara : Pantalla()
     object AnalisisPlanta : Pantalla()
     object DatosPlantas : Pantalla()
     object Graficos : Pantalla()
@@ -159,6 +172,16 @@ data class DiseasePrediction(
 
 // Las data classes ServerPlant y ServerPlantData están definidas en ServerConnection.kt
 
+// Data class para huertos guardados
+data class HuertoGuardado(
+    val id: String = UUID.randomUUID().toString(),
+    val nombre: String,
+    val ip: String,
+    val puerto: Int,
+    val fechaCreacion: Long = System.currentTimeMillis(),
+    val ultimaConexion: Long = System.currentTimeMillis()
+)
+
 // MainActivity
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -184,11 +207,8 @@ fun CherryApp() {
     var fotoUri by remember { mutableStateOf<Uri?>(null) }
     val FOTOS_DIR = remember { File(context.filesDir, "CherryFotos").apply { mkdirs() } }
 
-    var showGuardarDialog by remember { mutableStateOf<File?>(null) }
     var imagenSeleccionada by remember { mutableStateOf<File?>(null) }
     var showConfirmDelete by remember { mutableStateOf<File?>(null) }
-    var showSendDialog by remember { mutableStateOf<File?>(null) }
-    var showCamaraDialog by remember { mutableStateOf(false) }
     var showCamaraPersonalizada by remember { mutableStateOf(false) }
     var showVistaPrevia by remember { mutableStateOf<File?>(null) }
     var showResultadosAnalisis by remember { mutableStateOf<String?>(null) }
@@ -221,6 +241,12 @@ fun CherryApp() {
     var realAnalysisMessage by remember { mutableStateOf("Iniciando análisis...") }
     var imagenRealAnalysis by remember { mutableStateOf<File?>(null) }
     var realAnalysisResult by remember { mutableStateOf<DiseasePrediction?>(null) }
+    var analisisFromGaleria by remember { mutableStateOf(false) } // Para rastrear si viene de galería
+    
+    // Variables para captura de análisis
+    var showCapturaDialog by remember { mutableStateOf(false) }
+    var capturaFile by remember { mutableStateOf<File?>(null) }
+    var isCapturing by remember { mutableStateOf(false) }
     
     // --- Estado para Conectar al servidor ---
     var serverInput by remember { mutableStateOf("") } // Ej: 192.168.100.26:2000
@@ -229,6 +255,19 @@ fun CherryApp() {
     var selectedPlantId by remember { mutableStateOf<String?>(null) }
     var serverPlantData by remember { mutableStateOf<List<ServerPlantData>>(emptyList()) }
     var isConnecting by remember { mutableStateOf(false) }
+    
+    // --- Estado para Huertos Guardados ---
+    var huertosGuardados by remember { mutableStateOf<List<HuertoGuardado>>(emptyList()) }
+    var showNuevoHuertoDialog by remember { mutableStateOf(false) }
+    var showNombreHuertoDialog by remember { mutableStateOf(false) }
+    var nombreHuerto by remember { mutableStateOf("") }
+    var ipTemporal by remember { mutableStateOf("") }
+    
+    // --- Estado para Edición de Huertos ---
+    var showEditarHuertoDialog by remember { mutableStateOf(false) }
+    var huertoEditando by remember { mutableStateOf<HuertoGuardado?>(null) }
+    var nuevoNombreHuerto by remember { mutableStateOf("") }
+    var showEliminarHuertoDialog by remember { mutableStateOf(false) }
 
     // Navigation Drawer state
     var drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -252,6 +291,77 @@ fun CherryApp() {
         val sharedPrefs = context.getSharedPreferences("CultivAppPrefs", Context.MODE_PRIVATE)
         val serversSet = sharedPrefs.getStringSet("recent_servers", emptySet()) ?: emptySet()
         return serversSet.toList()
+    }
+    
+    // Funciones para manejar huertos guardados
+    fun saveHuertosGuardados(huertos: List<HuertoGuardado>) {
+        val sharedPrefs = context.getSharedPreferences("CultivAppPrefs", Context.MODE_PRIVATE)
+        val json = Gson().toJson(huertos)
+        sharedPrefs.edit().putString("huertos_guardados", json).apply()
+    }
+    
+    fun loadHuertosGuardados(): List<HuertoGuardado> {
+        val sharedPrefs = context.getSharedPreferences("CultivAppPrefs", Context.MODE_PRIVATE)
+        val json = sharedPrefs.getString("huertos_guardados", "[]") ?: "[]"
+        return try {
+            Gson().fromJson(json, object : TypeToken<List<HuertoGuardado>>(){}.type)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+    
+    fun guardarHuerto(nombre: String, ip: String) {
+        val partes = ip.split(":")
+        if (partes.size == 2) {
+            val nuevaIp = partes[0]
+            val puerto = partes[1].toIntOrNull() ?: 2000
+            val nuevoHuerto = HuertoGuardado(
+                nombre = nombre,
+                ip = nuevaIp,
+                puerto = puerto
+            )
+            val huertosActualizados = huertosGuardados + nuevoHuerto
+            huertosGuardados = huertosActualizados
+            saveHuertosGuardados(huertosActualizados)
+        }
+    }
+    
+    fun esIpNueva(ip: String): Boolean {
+        return huertosGuardados.none { "${it.ip}:${it.puerto}" == ip }
+    }
+    
+    fun actualizarUltimaConexion(ip: String) {
+        val huertosActualizados = huertosGuardados.map { huerto ->
+            if ("${huerto.ip}:${huerto.puerto}" == ip) {
+                huerto.copy(ultimaConexion = System.currentTimeMillis())
+            } else {
+                huerto
+            }
+        }
+        huertosGuardados = huertosActualizados
+        saveHuertosGuardados(huertosActualizados)
+    }
+    
+    fun editarHuerto(huerto: HuertoGuardado, nuevoNombre: String) {
+        val huertosActualizados = huertosGuardados.map { h ->
+            if (h.id == huerto.id) {
+                h.copy(nombre = nuevoNombre)
+            } else {
+                h
+            }
+        }
+        huertosGuardados = huertosActualizados
+        saveHuertosGuardados(huertosActualizados)
+    }
+    
+    fun eliminarHuerto(huerto: HuertoGuardado) {
+        val huertosActualizados = huertosGuardados.filter { it.id != huerto.id }
+        huertosGuardados = huertosActualizados
+        saveHuertosGuardados(huertosActualizados)
+    }
+    
+    fun obtenerNombreHuerto(serverInput: String): String? {
+        return huertosGuardados.find { "${it.ip}:${it.puerto}" == serverInput }?.nombre
     }
 
     // Para el doble toque para salir y Snackbar
@@ -299,6 +409,7 @@ fun CherryApp() {
     // Efecto para cargar IPs recientes al iniciar
     LaunchedEffect(Unit) {
         recentServers = loadRecentServers()
+        huertosGuardados = loadHuertosGuardados()
     }
     
 
@@ -346,12 +457,9 @@ fun CherryApp() {
     }
 
     // --- MANEJO DEL BOTÓN ATRÁS ---
-    BackHandler(enabled = pantalla != Pantalla.Bienvenida) {
+    BackHandler(enabled = true) {
         Log.d("BackHandler", "Principal: Pantalla actual: $pantalla")
         when (pantalla) {
-            Pantalla.Bienvenida -> {
-                // No hacer nada, ya estamos en bienvenida
-            }
             Pantalla.Inicio -> {
                 if (backPressedTime + 2000 > System.currentTimeMillis()) {
                     Log.d("BackHandler", "Principal: Saliendo de la app")
@@ -366,9 +474,13 @@ fun CherryApp() {
                     backPressedTime = System.currentTimeMillis()
                 }
             }
-            Pantalla.Galeria, Pantalla.MostrarDatos, Pantalla.DatosPlantas, Pantalla.Graficos, Pantalla.ConectarServidor, Pantalla.ListaPlantasServidor -> {
+            Pantalla.Galeria, Pantalla.MostrarDatos, Pantalla.DatosPlantas, Pantalla.Graficos, Pantalla.ConectarServidor -> {
                 Log.d("BackHandler", "Principal: Volviendo a Inicio desde $pantalla")
                 pantalla = Pantalla.Inicio
+            }
+            Pantalla.ListaPlantasServidor -> {
+                Log.d("BackHandler", "Principal: Volviendo a ConectarServidor desde ListaPlantasServidor")
+                pantalla = Pantalla.ConectarServidor
             }
             Pantalla.AnalisisPlanta -> {
                 Log.d("BackHandler", "Principal: Volviendo a Inicio desde Análisis de Plantas")
@@ -455,6 +567,26 @@ fun CherryApp() {
             realAnalysisMessage = "Iniciando análisis..."
             imagenRealAnalysis = null
             realAnalysisResult = null
+            // No cambiar analisisFromGaleria aquí, se maneja en los resultados
+        }
+    }
+    
+    // BackHandler para diálogo de edición de huerto
+    if (showEditarHuertoDialog) {
+        BackHandler(enabled = true) {
+            Log.d("BackHandler", "Cerrando diálogo de edición de huerto")
+            showEditarHuertoDialog = false
+            huertoEditando = null
+            nuevoNombreHuerto = ""
+        }
+    }
+    
+    // BackHandler para diálogo de eliminación de huerto
+    if (showEliminarHuertoDialog) {
+        BackHandler(enabled = true) {
+            Log.d("BackHandler", "Cerrando diálogo de eliminación de huerto")
+            showEliminarHuertoDialog = false
+            showEditarHuertoDialog = true
         }
     }
 
@@ -480,7 +612,7 @@ fun CherryApp() {
                 coroutineScope.launch { snackbarHostState.showSnackbar("No se pudo ajustar la resolución: ${e.localizedMessage}") }
                 Log.e("CherryApp", "Error al ajustar resolución", e)
             }
-            showGuardarDialog = file
+            // Foto tomada exitosamente
         } else if (!success) {
             coroutineScope.launch { snackbarHostState.showSnackbar("No se pudo tomar la foto") }
         }
@@ -625,10 +757,12 @@ fun CherryApp() {
                         Text(
                             when (pantalla) {
                                 Pantalla.SplashScreen -> "CultivApp"
-                                Pantalla.Bienvenida -> "CultivApp"
                                 Pantalla.Inicio -> "Inicio"
                                 Pantalla.ConectarServidor -> "Conectar al servidor"
-                                Pantalla.ListaPlantasServidor -> "Plantas (Servidor)"
+                                Pantalla.ListaPlantasServidor -> {
+                                    val nombreHuerto = obtenerNombreHuerto(serverInput)
+                                    if (nombreHuerto != null) "Plantas de $nombreHuerto" else "Plantas del Huerto"
+                                }
                                 Pantalla.DatosPlantaServidor -> "Datos de la planta"
                                 Pantalla.AnalisisPlanta -> "Análisis de Plantas"
                                 Pantalla.Galeria -> "Galería"
@@ -673,6 +807,9 @@ fun CherryApp() {
                                             
                                             originalBitmap.recycle()
                                             rotatedBitmap.recycle()
+                                            
+                                            // Marcar que NO viene de galería (viene de vista previa)
+                                            analisisFromGaleria = false
                                             
                                             // Mostrar pantalla de análisis real
                                             imagenRealAnalysis = tempFile
@@ -789,14 +926,6 @@ fun CherryApp() {
                     )
                 }
 
-                // Pantalla de Bienvenida
-                if (pantalla == Pantalla.Bienvenida) {
-                    WelcomeScreen(
-                        onStartApp = {
-                            pantalla = Pantalla.Inicio
-                        }
-                    )
-                }
 
                 // Pantalla principal (Inicio)
                 if (pantalla == Pantalla.Inicio && !showCamaraPersonalizada && imagenSeleccionada == null) {
@@ -866,7 +995,7 @@ fun CherryApp() {
                         isConnecting = isConnecting,
                         onPlantClick = { plantId ->
                             selectedPlantId = plantId
-                                                pantalla = Pantalla.DatosPlantaServidor
+                            pantalla = Pantalla.DatosPlantaServidor
                         }
                     )
                 }
@@ -919,12 +1048,36 @@ fun CherryApp() {
                                 }
                             }
                         },
+                        huertosGuardados = huertosGuardados,
+                        onHuertoClick = { ip ->
+                            serverInput = ip
+                            if (!recentServers.contains(ip)) {
+                                recentServers = (listOf(ip) + recentServers).take(5)
+                                saveRecentServers(recentServers)
+                            }
+                            actualizarUltimaConexion(ip)
+                            pantalla = Pantalla.ListaPlantasServidor
+                        },
+                        onEditarHuerto = { huerto ->
+                            huertoEditando = huerto
+                            nuevoNombreHuerto = huerto.nombre
+                            showEditarHuertoDialog = true
+                        },
                         onConnectClick = {
+                            // Verificar si es una IP nueva
+                            if (esIpNueva(serverInput)) {
+                                // Es una IP nueva, mostrar diálogo para agregar nombre
+                                ipTemporal = serverInput
+                                showNuevoHuertoDialog = true
+                            } else {
+                                // IP conocida, conectar directamente
                                 if (!recentServers.contains(serverInput)) {
                                     recentServers = (listOf(serverInput) + recentServers).take(5)
                                 saveRecentServers(recentServers)
                                 }
+                                actualizarUltimaConexion(serverInput)
                                 pantalla = Pantalla.ListaPlantasServidor
+                            }
                             },
                         onTestConnection = {
                             // Implementar prueba de conexión
@@ -1427,36 +1580,95 @@ fun CherryApp() {
                                 
                                 IconButton(
                                     onClick = {
-                                        analizandoPlanta = true
-                                        coroutineScope.launch {
-                                            val resultado = analizarPlanta(file)
-                                            analizandoPlanta = false
-                                            if (resultado != null) {
-                                                showResultadosAnalisis = resultado
+                                        // Preparar la imagen para análisis real
+                                        val tempFile = File(context.cacheDir, "temp_real_analysis_${System.currentTimeMillis()}.jpg")
+                                        try {
+                                            val originalBitmap = BitmapFactory.decodeFile(file.absolutePath)
+                                            if (originalBitmap != null) {
+                                                val matrix = Matrix()
+                                                matrix.postRotate(rotationAngle)
+                                                val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
+                                                
+                                                val outputStream = tempFile.outputStream()
+                                                rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
+                                                outputStream.close()
+                                                
+                                                originalBitmap.recycle()
+                                                rotatedBitmap.recycle()
+                                                
+                                                // Marcar que viene de galería
+                                                analisisFromGaleria = true
+                                                
+                                                // Mostrar pantalla de análisis real
+                                                imagenRealAnalysis = tempFile
+                                                showRealAnalysisScreen = true
                                                 imagenSeleccionada = null
-                                            } else {
+                                                rotationAngle = 0f
+                                                imageAnalysis = null
+                                                showAnalysisDetails = false
+                                                
+                                                // Iniciar análisis real con TensorFlow Lite
                                                 coroutineScope.launch { 
-                                                    snackbarHostState.showSnackbar("No se pudo conectar al servidor para el análisis") 
+                                                    realAnalysisProgress = 0f
+                                                    realAnalysisMessage = "Iniciando análisis..."
+                                                    
+                                                    // Simular carga real con diferentes etapas
+                                                    val etapas = listOf(
+                                                        "Preparando imagen..." to 0.2f,
+                                                        "Cargando modelo de IA..." to 0.4f,
+                                                        "Analizando características..." to 0.6f,
+                                                        "Procesando con TensorFlow..." to 0.8f,
+                                                        "Generando resultados..." to 1.0f
+                                                    )
+                                                    
+                                                    etapas.forEach { (mensaje, progreso) ->
+                                                        realAnalysisMessage = mensaje
+                                                        delay(800) // 800ms por etapa = 4 segundos total
+                                                        realAnalysisProgress = progreso
+                                                    }
+                                                    
+                                                    // Análisis real con TensorFlow Lite
+                                                    Log.d("TensorFlow", "Iniciando análisis real desde galería...")
+                                                    if (tensorFlowInterpreter != null) {
+                                                        Log.d("TensorFlow", "Interpreter disponible, procesando imagen...")
+                                                        val originalBitmap = BitmapFactory.decodeFile(tempFile.absolutePath)
+                                                        if (originalBitmap != null) {
+                                                            Log.d("TensorFlow", "Imagen cargada, ejecutando análisis...")
+                                                            realAnalysisResult = analyzeImageWithTensorFlow(tensorFlowInterpreter, originalBitmap)
+                                                            Log.d("TensorFlow", "Resultado del análisis: $realAnalysisResult")
+                                                            originalBitmap.recycle()
+                                                        } else {
+                                                            Log.e("TensorFlow", "No se pudo cargar la imagen")
+                                                        }
+                                                    } else {
+                                                        Log.e("TensorFlow", "Interpreter es null, usando fallback")
+                                                        // Fallback si no se puede cargar el modelo
+                                                        realAnalysisResult = DiseasePrediction(
+                                                            prediction = "Error: Modelo no disponible",
+                                                            confidence = 0.0f,
+                                                            preventionMeasures = listOf("No se pudo cargar el modelo de IA.")
+                                                        )
+                                                    }
+                                                    
+                                                    delay(500) // Pausa final
+                                                    showRealAnalysisScreen = false
+                                                    showResultadosAnalisis = "Análisis real completado"
                                                 }
+                                            }
+                                        } catch (e: Exception) {
+                                            coroutineScope.launch { 
+                                                snackbarHostState.showSnackbar("Error al procesar la imagen: ${e.message}") 
                                             }
                                         }
                                     },
                                     modifier = Modifier.size(40.dp)
                                 ) {
-                                    if (analizandoPlanta) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(20.dp),
-                                            color = MaterialTheme.colorScheme.primary,
-                                            strokeWidth = 2.dp
-                                        )
-                                    } else {
                                         Icon(
                                             Icons.Default.Send, 
-                                            contentDescription = "Enviar a Analizar", 
+                                        contentDescription = "Analizar con IA", 
                                             tint = MaterialTheme.colorScheme.primary,
                                             modifier = Modifier.size(20.dp)
                                         )
-                                    }
                                 }
                                 
                                 IconButton(
@@ -1984,10 +2196,87 @@ fun CherryApp() {
                             resultado = realAnalysisResult!!,
                             onBack = { 
                                 showResultadosAnalisis = null
-                                // Regresar a la vista previa de la foto
+                                if (analisisFromGaleria) {
+                                    // Si viene de galería, regresar a galería
+                                    pantalla = Pantalla.Galeria
+                                    analisisFromGaleria = false
+                                } else {
+                                    // Si viene de vista previa, regresar a vista previa
                                 showVistaPrevia = imagenRealAnalysis
+                                }
                                 imagenRealAnalysis = null
                                 realAnalysisResult = null
+                            },
+                            isCapturing = isCapturing,
+                            onGuardarCaptura = {
+                                // Función para guardar captura completa del análisis
+                                isCapturing = true
+                                coroutineScope.launch {
+                                    try {
+                                        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                                        val capturaFile = File(FOTOS_DIR, "ANALISIS_${timestamp}.jpg")
+                                        
+                                        // Crear captura completa del análisis
+                                        val density = Density(context)
+                                        val bitmap = createAnalysisScreenshot(context, imagenRealAnalysis, realAnalysisResult!!, density)
+                                        
+                                        if (bitmap != null) {
+                                            val outputStream = capturaFile.outputStream()
+                                            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                            outputStream.close()
+                                            bitmap.recycle()
+                                            
+                                            fotos = getFotos(FOTOS_DIR)
+                                            snackbarHostState.showSnackbar("Captura completa del análisis guardada en galería")
+                                        } else {
+                                            snackbarHostState.showSnackbar("Error al crear captura del análisis")
+                                        }
+                                    } catch (e: Exception) {
+                                        snackbarHostState.showSnackbar("Error al guardar captura: ${e.message}")
+                                        Log.e("Captura", "Error guardando captura", e)
+                                    } finally {
+                                        isCapturing = false
+                                    }
+                                }
+                            },
+                            onCompartirCaptura = {
+                                // Función para compartir captura completa del análisis
+                                isCapturing = true
+                                coroutineScope.launch {
+                                    try {
+                                        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                                        val tempFile = File(context.cacheDir, "ANALISIS_COMPARTIR_${timestamp}.jpg")
+                                        
+                                        // Crear captura completa del análisis
+                                        val density = Density(context)
+                                        val bitmap = createAnalysisScreenshot(context, imagenRealAnalysis, realAnalysisResult!!, density)
+                                        
+                                        if (bitmap != null) {
+                                            val outputStream = tempFile.outputStream()
+                                            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                            outputStream.close()
+                                            bitmap.recycle()
+                                            
+                                            // Compartir la captura usando URI directo
+                                            val uri = Uri.fromFile(tempFile)
+                                            val sendIntent: Intent = Intent().apply {
+                                                action = Intent.ACTION_SEND
+                                                putExtra(Intent.EXTRA_STREAM, uri)
+                                                type = "image/jpeg"
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            val shareIntent = Intent.createChooser(sendIntent, "Compartir análisis")
+                                            context.startActivity(shareIntent)
+                                        } else {
+                                            snackbarHostState.showSnackbar("Error al crear captura del análisis")
+                                        }
+                                    } catch (e: Exception) {
+                                        snackbarHostState.showSnackbar("Error al compartir captura: ${e.message}")
+                                        Log.e("Captura", "Error compartiendo captura", e)
+                                    } finally {
+                                        isCapturing = false
+                                    }
+                                }
                             }
                         )
                     } else if (imagenEnfermedad != null) {
@@ -2024,6 +2313,216 @@ fun CherryApp() {
                         }
                     )
                 }
+                
+                // Diálogo para nuevo huerto
+                if (showNuevoHuertoDialog) {
+                    AlertDialog(
+                        onDismissRequest = { 
+                            showNuevoHuertoDialog = false
+                            pantalla = Pantalla.ConectarServidor
+                        },
+                        title = { Text("🌱 Nuevo Huerto Detectado") },
+                        text = { Text("¿Deseas agregar un nombre a este huerto para futuras conexiones?") },
+                        confirmButton = {
+                            TextButton(
+                                onClick = { 
+                                    showNuevoHuertoDialog = false
+                                    showNombreHuertoDialog = true
+                                }
+                            ) {
+                                Text("Sí")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = { 
+                                    // Ir directo a plantas sin guardar
+                                    if (!recentServers.contains(ipTemporal)) {
+                                        recentServers = (listOf(ipTemporal) + recentServers).take(5)
+                                        saveRecentServers(recentServers)
+                                    }
+                                    pantalla = Pantalla.ListaPlantasServidor
+                                    showNuevoHuertoDialog = false
+                                }
+                            ) {
+                                Text("No")
+                            }
+                        }
+                    )
+                }
+                
+                // Diálogo para nombre del huerto
+                if (showNombreHuertoDialog) {
+                    AlertDialog(
+                        onDismissRequest = { 
+                            showNombreHuertoDialog = false
+                            pantalla = Pantalla.ConectarServidor
+                        },
+                        title = { Text("📝 Nombre del Huerto") },
+                        text = {
+                            Column {
+                                Text("Escribe un nombre para tu huerto (máximo 20 caracteres):")
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = nombreHuerto,
+                                    onValueChange = { 
+                                        if (it.length <= 20) nombreHuerto = it
+                                    },
+                                    label = { Text("Nombre del huerto") },
+                                    placeholder = { Text("Mi Huerto de Tomates") },
+                                    singleLine = true
+                                )
+                                Text(
+                                    text = "${nombreHuerto.length}/20",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (nombreHuerto.length > 20) Color.Red else Color.Gray
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = { 
+                                    if (nombreHuerto.isNotBlank()) {
+                                        guardarHuerto(nombreHuerto, ipTemporal)
+                                        if (!recentServers.contains(ipTemporal)) {
+                                            recentServers = (listOf(ipTemporal) + recentServers).take(5)
+                                            saveRecentServers(recentServers)
+                                        }
+                                        actualizarUltimaConexion(ipTemporal)
+                                        pantalla = Pantalla.ListaPlantasServidor
+                                        showNombreHuertoDialog = false
+                                        nombreHuerto = ""
+                                        ipTemporal = ""
+                                    }
+                                },
+                                enabled = nombreHuerto.isNotBlank()
+                            ) {
+                                Text("Guardar")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = { 
+                                    showNombreHuertoDialog = false
+                                    pantalla = Pantalla.ConectarServidor
+                                }
+                            ) {
+                                Text("Cancelar")
+                            }
+                        }
+                    )
+                }
+                
+                // Diálogo para editar huerto
+                if (showEditarHuertoDialog && huertoEditando != null) {
+                    val huerto = huertoEditando!!
+                    AlertDialog(
+                        onDismissRequest = { 
+                            showEditarHuertoDialog = false
+                            huertoEditando = null
+                            nuevoNombreHuerto = ""
+                        },
+                        title = { Text("✏️ Editar Huerto: ${huerto.nombre}") },
+                        text = {
+                            Column {
+                                Text("Escribe un nuevo nombre para tu huerto (máximo 20 caracteres):")
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = nuevoNombreHuerto,
+                                    onValueChange = { 
+                                        if (it.length <= 20) nuevoNombreHuerto = it
+                                    },
+                                    label = { Text("Nuevo nombre del huerto") },
+                                    placeholder = { Text("Mi Huerto de Tomates") },
+                                    singleLine = true
+                                )
+                                Text(
+                                    text = "${nuevoNombreHuerto.length}/20",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (nuevoNombreHuerto.length > 20) Color.Red else Color.Gray
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = { 
+                                    if (nuevoNombreHuerto.isNotBlank() && nuevoNombreHuerto != huerto.nombre) {
+                                        editarHuerto(huerto, nuevoNombreHuerto)
+                                    }
+                                    showEditarHuertoDialog = false
+                                    huertoEditando = null
+                                    nuevoNombreHuerto = ""
+                                },
+                                enabled = nuevoNombreHuerto.isNotBlank() && nuevoNombreHuerto != huerto.nombre
+                            ) {
+                                Text("Guardar")
+                            }
+                        },
+                        dismissButton = {
+                            Row {
+                                TextButton(
+                                    onClick = { 
+                                        showEliminarHuertoDialog = true
+                                        showEditarHuertoDialog = false
+                                    },
+                                    colors = ButtonDefaults.textButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.error
+                                    )
+                                ) {
+                                    Text("Elim. huerto")
+                                }
+                                TextButton(
+                                    onClick = { 
+                                        showEditarHuertoDialog = false
+                                        huertoEditando = null
+                                        nuevoNombreHuerto = ""
+                                    }
+                                ) {
+                                    Text("Cancelar")
+                                }
+                            }
+                        }
+                    )
+                }
+                
+                // Diálogo de confirmación para eliminar huerto
+                if (showEliminarHuertoDialog && huertoEditando != null) {
+                    val huerto = huertoEditando!!
+                    AlertDialog(
+                        onDismissRequest = { 
+                            showEliminarHuertoDialog = false
+                            huertoEditando = null
+                            nuevoNombreHuerto = ""
+                        },
+                        title = { Text("🗑️ Eliminar Huerto") },
+                        text = { Text("¿Estás seguro de que quieres eliminar el huerto '${huerto.nombre}'? Esta acción no se puede deshacer.") },
+                        confirmButton = {
+                            TextButton(
+                                onClick = { 
+                                    eliminarHuerto(huerto)
+                                    showEliminarHuertoDialog = false
+                                    huertoEditando = null
+                                    nuevoNombreHuerto = ""
+                                },
+                                colors = ButtonDefaults.textButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error
+                                )
+                            ) {
+                                Text("Eliminar")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = { 
+                                    showEliminarHuertoDialog = false
+                                    showEditarHuertoDialog = true
+                                }
+                            ) {
+                                Text("Cancelar")
+                            }
+                        }
+                    )
+                }
 
                 if (showConfirmDelete != null) {
                     val fileToDelete = showConfirmDelete!!
@@ -2051,34 +2550,6 @@ fun CherryApp() {
                     )
                 }
 
-                if (showCamaraDialog) {
-                    AlertDialog(
-                        onDismissRequest = { showCamaraDialog = false },
-                        title = { Text("Seleccionar Cámara") },
-                        text = { Text("¿Qué cámara deseas utilizar?") },
-                        confirmButton = {
-                            Button(onClick = {
-                                showCamaraDialog = false
-                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                                    showCamaraPersonalizada = true
-                                } else {
-                                    requestCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                                }
-                            }) { Text("Personalizada") }
-                        },
-                        dismissButton = {
-                            Button(onClick = {
-                                showCamaraDialog = false
-                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                                    abrirCamaraNativa()
-                                } else {
-                                    requestCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                                }
-                            }) { Text("Nativa del Sistema") }
-                        },
-                        properties = DialogProperties(dismissOnClickOutside = true, dismissOnBackPress = true)
-                    )
-                }
             }
         }
     }
@@ -2895,7 +3366,230 @@ fun analyzeImageWithTensorFlow(interpreter: Interpreter, bitmap: Bitmap): Diseas
     }
 }
 
+// Función para capturar pantalla completa
+fun captureScreen(
+    context: Context,
+    view: android.view.View,
+    density: Density
+): Bitmap? {
+    return try {
+        val bitmap = Bitmap.createBitmap(
+            view.width,
+            view.height,
+            Bitmap.Config.ARGB_8888
+        )
+        val canvas = android.graphics.Canvas(bitmap)
+        view.draw(canvas)
+        bitmap
+    } catch (e: Exception) {
+        Log.e("ScreenCapture", "Error capturando pantalla: ${e.message}")
+        null
+    }
+}
 
+// Función para crear captura completa del análisis
+fun createAnalysisScreenshot(
+    context: Context,
+    imagen: File?,
+    resultado: DiseasePrediction,
+    density: Density
+): Bitmap? {
+    return try {
+        // Dimensiones de la captura (ancho fijo, alto dinámico)
+        val width = 1080 // Ancho fijo para buena calidad
+        val padding = 32 // Padding interno
+        val cardSpacing = 16 // Espacio entre tarjetas
+        val headerHeight = 80 // Altura del header
+        val footerHeight = 120 // Altura del footer con botones
+        
+        // Calcular altura total basada en el contenido
+        var totalHeight = headerHeight + padding
+        
+        // Altura de la imagen (si existe)
+        if (imagen != null) {
+            totalHeight += 250 + cardSpacing // Imagen + espacio
+        }
+        
+        // Altura de las tarjetas de información
+        totalHeight += 80 + cardSpacing // Estado de la planta
+        totalHeight += 80 + cardSpacing // Confianza
+        totalHeight += 200 + cardSpacing // Recomendaciones (estimado)
+        totalHeight += 100 + cardSpacing // Información adicional
+        
+        totalHeight += footerHeight + padding
+        
+        val bitmap = Bitmap.createBitmap(width, totalHeight, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        
+        // Fondo
+        canvas.drawColor(android.graphics.Color.WHITE)
+        
+        var currentY = padding
+        
+        // Header
+        val headerPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.parseColor("#1976D2")
+            textSize = 48f
+            isAntiAlias = true
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText("RESULTADOS DEL ANÁLISIS REAL", padding.toFloat(), currentY + 50f, headerPaint)
+        currentY += headerHeight
+        
+        // Imagen (si existe)
+        if (imagen != null) {
+            try {
+                val imageBitmap = BitmapFactory.decodeFile(imagen.absolutePath)
+                if (imageBitmap != null) {
+                    // Calcular dimensiones manteniendo la proporción original
+                    val maxWidth = width - (padding * 2)
+                    val maxHeight = 300 // Altura máxima
+                    
+                    val originalWidth = imageBitmap.width
+                    val originalHeight = imageBitmap.height
+                    
+                    // Calcular escala manteniendo proporción
+                    val scaleX = maxWidth.toFloat() / originalWidth
+                    val scaleY = maxHeight.toFloat() / originalHeight
+                    val scale = minOf(scaleX, scaleY) // Usar la escala más pequeña para mantener proporción
+                    
+                    val scaledWidth = (originalWidth * scale).toInt()
+                    val scaledHeight = (originalHeight * scale).toInt()
+                    
+                    // Centrar la imagen horizontalmente
+                    val xOffset = padding + (maxWidth - scaledWidth) / 2
+                    
+                    val scaledBitmap = Bitmap.createScaledBitmap(imageBitmap, scaledWidth, scaledHeight, true)
+                    canvas.drawBitmap(scaledBitmap, xOffset.toFloat(), currentY.toFloat(), null)
+                    scaledBitmap.recycle()
+                    imageBitmap.recycle()
+                    
+                    // Actualizar currentY con la altura real de la imagen escalada
+                    currentY += scaledHeight + cardSpacing
+                }
+            } catch (e: Exception) {
+                Log.e("Screenshot", "Error cargando imagen: ${e.message}")
+                currentY += 250 + cardSpacing // Altura por defecto si hay error
+            }
+        }
+        
+        // Estado de la planta
+        val isHealthy = resultado.prediction == "Tomato_healthy"
+        val statusColor = if (isHealthy) android.graphics.Color.parseColor("#4CAF50") else android.graphics.Color.parseColor("#F44336")
+        val statusText = if (isHealthy) "Estado: Saludable" else "Enfermedad: ${traducirEnfermedad(resultado.prediction)}"
+        
+        val cardPaint = android.graphics.Paint().apply {
+            color = statusColor
+            isAntiAlias = true
+        }
+        canvas.drawRoundRect(padding.toFloat(), currentY.toFloat(), (width - padding).toFloat(), (currentY + 60).toFloat(), 12f, 12f, cardPaint)
+        
+        val textPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.WHITE
+            textSize = 32f
+            isAntiAlias = true
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText(statusText, (padding + 20).toFloat(), currentY + 40f, textPaint)
+        currentY += 80 + cardSpacing
+        
+        // Confianza
+        val confidenceText = "Confianza: ${(resultado.confidence * 100).toInt()}%"
+        val confidencePaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.parseColor("#FF9800")
+            isAntiAlias = true
+        }
+        canvas.drawRoundRect(padding.toFloat(), currentY.toFloat(), (width - padding).toFloat(), (currentY + 60).toFloat(), 12f, 12f, confidencePaint)
+        canvas.drawText(confidenceText, (padding + 20).toFloat(), currentY + 40f, textPaint)
+        currentY += 80 + cardSpacing
+        
+        // Recomendaciones
+        val recPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.parseColor("#E3F2FD")
+            isAntiAlias = true
+        }
+        canvas.drawRoundRect(padding.toFloat(), currentY.toFloat(), (width - padding).toFloat(), (currentY + 180).toFloat(), 12f, 12f, recPaint)
+        
+        val recTitlePaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.parseColor("#1976D2")
+            textSize = 36f
+            isAntiAlias = true
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText("RECOMENDACIONES", (padding + 20).toFloat(), currentY + 40f, recTitlePaint)
+        
+        val recTextPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.parseColor("#424242")
+            textSize = 24f
+            isAntiAlias = true
+        }
+        
+        var recY = currentY + 70
+        resultado.preventionMeasures.take(3).forEach { measure ->
+            canvas.drawText("• $measure", (padding + 20).toFloat(), recY.toFloat(), recTextPaint)
+            recY += 30
+        }
+        currentY += 200 + cardSpacing
+        
+        // Información adicional
+        val infoPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.parseColor("#F3E5F5")
+            isAntiAlias = true
+        }
+        canvas.drawRoundRect(padding.toFloat(), currentY.toFloat(), (width - padding).toFloat(), (currentY + 80).toFloat(), 12f, 12f, infoPaint)
+        
+        val infoTitlePaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.parseColor("#7B1FA2")
+            textSize = 28f
+            isAntiAlias = true
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText("Análisis Real con IA", (padding + 20).toFloat(), currentY + 30f, infoTitlePaint)
+        
+        val infoTextPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.parseColor("#424242")
+            textSize = 20f
+            isAntiAlias = true
+        }
+        canvas.drawText("TensorFlow Lite - Detección de enfermedades en tomate", (padding + 20).toFloat(), currentY + 60f, infoTextPaint)
+        currentY += 100 + cardSpacing
+        
+        // Footer con botones
+        val footerPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.parseColor("#F5F5F5")
+            isAntiAlias = true
+        }
+        canvas.drawRoundRect(padding.toFloat(), currentY.toFloat(), (width - padding).toFloat(), (currentY + 100).toFloat(), 16f, 16f, footerPaint)
+        
+        val footerTextPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.parseColor("#1976D2")
+            textSize = 32f
+            isAntiAlias = true
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText("Capturar Análisis", (width / 2 - 200).toFloat(), currentY + 40f, footerTextPaint)
+        
+        val buttonPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.parseColor("#1976D2")
+            isAntiAlias = true
+        }
+        canvas.drawRoundRect((width / 2 - 150).toFloat(), currentY + 50f, (width / 2 - 50).toFloat(), currentY + 90f, 8f, 8f, buttonPaint)
+        canvas.drawRoundRect((width / 2 + 50).toFloat(), currentY + 50f, (width / 2 + 150).toFloat(), currentY + 90f, 8f, 8f, buttonPaint)
+        
+        val buttonTextPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.WHITE
+            textSize = 24f
+            isAntiAlias = true
+        }
+        canvas.drawText("Guardar", (width / 2 - 120).toFloat(), currentY + 75f, buttonTextPaint)
+        canvas.drawText("Compartir", (width / 2 + 70).toFloat(), currentY + 75f, buttonTextPaint)
+        
+        bitmap
+    } catch (e: Exception) {
+        Log.e("AnalysisScreenshot", "Error creando captura: ${e.message}")
+        null
+    }
+}
 
 // Funciones auxiliares
 
@@ -3425,7 +4119,17 @@ fun EnfermedadScreen(progress: Float, message: String, imagen: File?) {
 
 
 @Composable
-fun ResultadosRealAnalisisScreen(imagen: File?, resultado: DiseasePrediction, onBack: () -> Unit) {
+fun ResultadosRealAnalisisScreen(
+    imagen: File?, 
+    resultado: DiseasePrediction, 
+    onBack: () -> Unit,
+    onGuardarCaptura: () -> Unit,
+    onCompartirCaptura: () -> Unit,
+    isCapturing: Boolean = false
+) {
+    val view = LocalView.current
+    val density = LocalDensity.current
+    
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -3632,6 +4336,126 @@ fun ResultadosRealAnalisisScreen(imagen: File?, resultado: DiseasePrediction, on
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
                         )
+                    }
+                }
+            }
+            
+            // Botones de captura
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    elevation = CardDefaults.cardElevation(8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            "Capturar Análisis",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            // Botón de guardar captura
+                            Button(
+                                onClick = onGuardarCaptura,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(56.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                enabled = !isCapturing
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    if (isCapturing) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(20.dp),
+                                            color = MaterialTheme.colorScheme.onPrimary,
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "Capturando...",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    } else {
+                                        Icon(
+                                            Icons.Default.Download,
+                                            contentDescription = "Guardar",
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "Guardar",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+                            
+                            // Botón de compartir captura
+                            Button(
+                                onClick = onCompartirCaptura,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(56.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.secondary,
+                                    contentColor = MaterialTheme.colorScheme.onSecondary
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                enabled = !isCapturing
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    if (isCapturing) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(20.dp),
+                                            color = MaterialTheme.colorScheme.onSecondary,
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "Capturando...",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    } else {
+                                        Icon(
+                                            Icons.Default.Share,
+                                            contentDescription = "Compartir",
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "Compartir",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
