@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
@@ -117,9 +118,6 @@ import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.drawscope.draw
 import androidx.compose.ui.graphics.asAndroidBitmap
 import com.cucei.cherryapp.ui.CameraScreen
-import com.cucei.cherryapp.ui.PlantDataScreen
-import com.cucei.cherryapp.ui.ChartsScreen
-import com.cucei.cherryapp.viewmodel.PlantDataViewModel
 import com.cucei.cherryapp.ui.theme.WhiteButton
 import com.cucei.cherryapp.ui.theme.BlackText
 import com.cucei.cherryapp.ui.theme.DarkButton
@@ -140,11 +138,11 @@ sealed class Pantalla {
     object ConectarServidor : Pantalla()
     object ListaPlantasServidor : Pantalla()
     object DatosPlantaServidor : Pantalla()
-    object MostrarDatos : Pantalla()
+    object DatosPlantaFiltro : Pantalla()
+    object ListaRegistrosFiltrados : Pantalla()
     object Galeria : Pantalla()
     object AnalisisPlanta : Pantalla()
-    object DatosPlantas : Pantalla()
-    object Graficos : Pantalla()
+    
 }
 
 // Data class para items del Navigation Drawer
@@ -193,6 +191,16 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val nightMode = newConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        when (nightMode) {
+            Configuration.UI_MODE_NIGHT_YES -> Log.d("Config", "Cambio a modo oscuro - sin recrear actividad")
+            Configuration.UI_MODE_NIGHT_NO -> Log.d("Config", "Cambio a modo claro - sin recrear actividad")
+            else -> Log.d("Config", "Cambio de uiMode detectado")
+        }
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
@@ -200,10 +208,11 @@ class MainActivity : ComponentActivity() {
 fun CherryApp() {
     val context = LocalContext.current
     var pantalla by remember { mutableStateOf<Pantalla>(Pantalla.SplashScreen) }
-    var registros by remember { mutableStateOf<List<Registro>>(emptyList()) }
+    
     var error by remember { mutableStateOf<String?>(null) }
     var showError by remember { mutableStateOf(false) }
     var fotos by remember { mutableStateOf<List<File>>(emptyList()) }
+    var showAnalisisEnGaleria by remember { mutableStateOf(false) } // false = fotos, true = análisis
     var fotoUri by remember { mutableStateOf<Uri?>(null) }
     val FOTOS_DIR = remember { File(context.filesDir, "CherryFotos").apply { mkdirs() } }
 
@@ -218,23 +227,6 @@ fun CherryApp() {
     var imageAnalysis by remember { mutableStateOf<ImageAnalysis?>(null) }
     var showAnalysisDetails by remember { mutableStateOf(false) }
     
-    // Nuevas variables para la pantalla de análisis con barra de carga
-    var showAnalisisScreen by remember { mutableStateOf(false) }
-    var analisisProgress by remember { mutableStateOf(0f) }
-    var analisisMessage by remember { mutableStateOf("Iniciando análisis...") }
-    var imagenAnalizada by remember { mutableStateOf<File?>(null) }
-    
-    // Variables para la pantalla de análisis de enfermedades (presión larga)
-    var showEnfermedadScreen by remember { mutableStateOf(false) }
-    var enfermedadProgress by remember { mutableStateOf(0f) }
-    var enfermedadMessage by remember { mutableStateOf("Iniciando detección...") }
-    var imagenEnfermedad by remember { mutableStateOf<File?>(null) }
-    
-    // Variables para doble toque
-    var lastTapTime by remember { mutableStateOf(0L) }
-    var isDoubleTap by remember { mutableStateOf(false) }
-    var isAnalyzing by remember { mutableStateOf(false) }
-    
     // Variables para análisis real con TensorFlow Lite
     var showRealAnalysisScreen by remember { mutableStateOf(false) }
     var realAnalysisProgress by remember { mutableStateOf(0f) }
@@ -248,20 +240,17 @@ fun CherryApp() {
     var capturaFile by remember { mutableStateOf<File?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
     
-    // --- Estado para Conectar al servidor ---
+    // --- Estado para Huertos ---
     var serverInput by remember { mutableStateOf("") } // Ej: 192.168.100.26:2000
     var recentServers by remember { mutableStateOf<List<String>>(emptyList()) }
     var serverPlants by remember { mutableStateOf<List<ServerPlant>>(emptyList()) }
     var selectedPlantId by remember { mutableStateOf<String?>(null) }
     var serverPlantData by remember { mutableStateOf<List<ServerPlantData>>(emptyList()) }
+    var registrosFiltrados by remember { mutableStateOf<List<ServerPlantData>>(emptyList()) }
     var isConnecting by remember { mutableStateOf(false) }
     
     // --- Estado para Huertos Guardados ---
     var huertosGuardados by remember { mutableStateOf<List<HuertoGuardado>>(emptyList()) }
-    var showNuevoHuertoDialog by remember { mutableStateOf(false) }
-    var showNombreHuertoDialog by remember { mutableStateOf(false) }
-    var nombreHuerto by remember { mutableStateOf("") }
-    var ipTemporal by remember { mutableStateOf("") }
     
     // --- Estado para Edición de Huertos ---
     var showEditarHuertoDialog by remember { mutableStateOf(false) }
@@ -273,8 +262,7 @@ fun CherryApp() {
     var drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     var scope = rememberCoroutineScope()
     
-    // ViewModel para datos de plantas
-    val plantDataViewModel = remember { PlantDataViewModel() }
+    
     
     // TensorFlow Lite interpreter
     val tensorFlowInterpreter = remember { loadTensorFlowModel(context) }
@@ -424,7 +412,7 @@ fun CherryApp() {
                 description = "Pantalla principal de la aplicación"
             ),
             DrawerItem(
-                title = "Conectar al servidor",
+                title = "Huertos",
                 icon = { Icon(Icons.Filled.Info, contentDescription = null) },
                 screen = Pantalla.ConectarServidor,
                 description = "Configura la conexión con el servidor"
@@ -441,18 +429,7 @@ fun CherryApp() {
                 screen = Pantalla.Galeria,
                 description = "Visualiza las fotos que has tomado"
             ),
-            DrawerItem(
-                title = "Cargar Datos (JSON)",
-                icon = { Icon(Icons.Filled.Folder, contentDescription = null) },
-                screen = Pantalla.MostrarDatos,
-                description = "Carga y visualiza tus registros de plantas"
-            ),
-            DrawerItem(
-                title = "Datos de Plantas",
-                icon = { Icon(Icons.Filled.Analytics, contentDescription = null) },
-                screen = Pantalla.DatosPlantas,
-                description = "Gestiona y visualiza datos de plantas"
-            )
+            
         )
     }
 
@@ -474,7 +451,7 @@ fun CherryApp() {
                     backPressedTime = System.currentTimeMillis()
                 }
             }
-            Pantalla.Galeria, Pantalla.MostrarDatos, Pantalla.DatosPlantas, Pantalla.Graficos, Pantalla.ConectarServidor -> {
+            Pantalla.Galeria, Pantalla.ConectarServidor -> {
                 Log.d("BackHandler", "Principal: Volviendo a Inicio desde $pantalla")
                 pantalla = Pantalla.Inicio
             }
@@ -525,36 +502,11 @@ fun CherryApp() {
         BackHandler(enabled = true) {
             Log.d("BackHandler", "Regresando a vista previa desde resultados de análisis")
             showResultadosAnalisis = null
-            // Regresar a la vista previa de la foto
-            if (imagenEnfermedad != null) {
-                showVistaPrevia = imagenEnfermedad
-                imagenEnfermedad = null
-            } else if (imagenAnalizada != null) {
-                showVistaPrevia = imagenAnalizada
-                imagenAnalizada = null
+            // Regresar a la vista previa de la foto si existe imagenRealAnalysis
+            if (imagenRealAnalysis != null) {
+                showVistaPrevia = imagenRealAnalysis
+                imagenRealAnalysis = null
             }
-        }
-    }
-
-    // BackHandler para la pantalla de análisis con barra de carga
-    if (showAnalisisScreen) {
-        BackHandler(enabled = true) {
-            Log.d("BackHandler", "Cerrando pantalla de análisis")
-            showAnalisisScreen = false
-            analisisProgress = 0f
-            analisisMessage = "Iniciando análisis..."
-            imagenAnalizada = null
-        }
-    }
-
-    // BackHandler para la pantalla de análisis de enfermedades
-    if (showEnfermedadScreen) {
-        BackHandler(enabled = true) {
-            Log.d("BackHandler", "Cerrando pantalla de análisis de enfermedades")
-            showEnfermedadScreen = false
-            enfermedadProgress = 0f
-            enfermedadMessage = "Iniciando detección..."
-            imagenEnfermedad = null
         }
     }
 
@@ -568,6 +520,21 @@ fun CherryApp() {
             imagenRealAnalysis = null
             realAnalysisResult = null
             // No cambiar analisisFromGaleria aquí, se maneja en los resultados
+        }
+    }
+
+    // BackHandler para navegación del flujo de registros (Propuesta A)
+    if (pantalla == Pantalla.ListaRegistrosFiltrados) {
+        BackHandler(enabled = true) {
+            Log.d("BackHandler", "Regresando de ListaRegistrosFiltrados a DatosPlantaFiltro")
+            pantalla = Pantalla.DatosPlantaFiltro
+        }
+    }
+
+    if (pantalla == Pantalla.DatosPlantaFiltro) {
+        BackHandler(enabled = true) {
+            Log.d("BackHandler", "Regresando de DatosPlantaFiltro a ListaPlantasServidor")
+            pantalla = Pantalla.ListaPlantasServidor
         }
     }
     
@@ -646,20 +613,7 @@ fun CherryApp() {
     }
 
     // File picker para JSON
-    val pickJsonLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) {
-            try {
-                context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                    val json = inputStream.bufferedReader().readText()
-                    registros = parseJson(json)
-                    pantalla = Pantalla.MostrarDatos
-                }
-            } catch (e: Exception) {
-                coroutineScope.launch { snackbarHostState.showSnackbar("Error al abrir el archivo: ${e.localizedMessage}") }
-                Log.e("CherryApp", "Error al abrir JSON", e)
-            }
-        }
-    }
+    
 
     // Navigation Drawer (deshabilitado durante splash screen)
     ModalNavigationDrawer(
@@ -685,12 +639,11 @@ fun CherryApp() {
                             }
                             when (item.screen) {
                                 Pantalla.Galeria -> {
-                                    fotos = getFotos(FOTOS_DIR)
+                                    fotos = getFotosNormales(FOTOS_DIR)
+                                    showAnalisisEnGaleria = false
                                     pantalla = item.screen
                                 }
-                                Pantalla.MostrarDatos -> {
-                                    pickJsonLauncher.launch("application/json")
-                                }
+                                
                                 else -> {
                                     pantalla = item.screen
                                 }
@@ -758,7 +711,7 @@ fun CherryApp() {
                             when (pantalla) {
                                 Pantalla.SplashScreen -> "CultivApp"
                                 Pantalla.Inicio -> "Inicio"
-                                Pantalla.ConectarServidor -> "Conectar al servidor"
+                                Pantalla.ConectarServidor -> "Huertos"
                                 Pantalla.ListaPlantasServidor -> {
                                     val nombreHuerto = obtenerNombreHuerto(serverInput)
                                     if (nombreHuerto != null) "Plantas de $nombreHuerto" else "Plantas del Huerto"
@@ -766,9 +719,7 @@ fun CherryApp() {
                                 Pantalla.DatosPlantaServidor -> "Datos de la planta"
                                 Pantalla.AnalisisPlanta -> "Análisis de Plantas"
                                 Pantalla.Galeria -> "Galería"
-                                Pantalla.MostrarDatos -> "Datos JSON"
-                                Pantalla.DatosPlantas -> "Datos de Plantas"
-                                Pantalla.Graficos -> "Gráficos"
+                                
                                 else -> "CultivApp"
                             }
                         )
@@ -789,103 +740,6 @@ fun CherryApp() {
                     actions = {
                         // Botones de rotación en el header (solo en vista previa)
                         if (showVistaPrevia != null) {
-                            // Botón invisible para análisis real con TensorFlow Lite
-                            IconButton(
-                                onClick = {
-                                    // Preparar la imagen para análisis real
-                                    val tempFile = File(context.cacheDir, "temp_real_analysis_${System.currentTimeMillis()}.jpg")
-                                    try {
-                                        val originalBitmap = BitmapFactory.decodeFile(showVistaPrevia!!.absolutePath)
-                                        if (originalBitmap != null) {
-                                            val matrix = Matrix()
-                                            matrix.postRotate(rotationAngle)
-                                            val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
-                                            
-                                            val outputStream = tempFile.outputStream()
-                                            rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
-                                            outputStream.close()
-                                            
-                                            originalBitmap.recycle()
-                                            rotatedBitmap.recycle()
-                                            
-                                            // Marcar que NO viene de galería (viene de vista previa)
-                                            analisisFromGaleria = false
-                                            
-                                            // Mostrar pantalla de análisis real
-                                            imagenRealAnalysis = tempFile
-                                            showRealAnalysisScreen = true
-                                            showVistaPrevia = null
-                                            rotationAngle = 0f
-                                            imageAnalysis = null
-                                            showAnalysisDetails = false
-                                            
-                                            // Iniciar análisis real con TensorFlow Lite
-                                            coroutineScope.launch {
-                                                realAnalysisProgress = 0f
-                                                realAnalysisMessage = "Iniciando análisis..."
-                                                
-                                                // Simular carga real con diferentes etapas
-                                                val etapas = listOf(
-                                                    "Preparando imagen..." to 0.2f,
-                                                    "Cargando modelo de IA..." to 0.4f,
-                                                    "Analizando características..." to 0.6f,
-                                                    "Procesando con TensorFlow..." to 0.8f,
-                                                    "Generando resultados..." to 1.0f
-                                                )
-                                                
-                                                etapas.forEach { (mensaje, progreso) ->
-                                                    realAnalysisMessage = mensaje
-                                                    delay(800) // 800ms por etapa = 4 segundos total
-                                                    realAnalysisProgress = progreso
-                                                }
-                                                
-                                                // Análisis real con TensorFlow Lite
-                                                Log.d("TensorFlow", "Iniciando análisis real...")
-                                                if (tensorFlowInterpreter != null) {
-                                                    Log.d("TensorFlow", "Interpreter disponible, procesando imagen...")
-                                                    val originalBitmap = BitmapFactory.decodeFile(tempFile.absolutePath)
-                                                    if (originalBitmap != null) {
-                                                        Log.d("TensorFlow", "Imagen cargada, ejecutando análisis...")
-                                                        realAnalysisResult = analyzeImageWithTensorFlow(tensorFlowInterpreter, originalBitmap)
-                                                        Log.d("TensorFlow", "Resultado del análisis: $realAnalysisResult")
-                                                        originalBitmap.recycle()
-                                                    } else {
-                                                        Log.e("TensorFlow", "No se pudo cargar la imagen")
-                                                    }
-                                                } else {
-                                                    Log.e("TensorFlow", "Interpreter es null, usando fallback")
-                                                    // Fallback si no se puede cargar el modelo
-                                                    realAnalysisResult = DiseasePrediction(
-                                                        prediction = "Error: Modelo no disponible",
-                                                        confidence = 0.0f,
-                                                        preventionMeasures = listOf("No se pudo cargar el modelo de IA.")
-                                                    )
-                                                }
-                                                
-                                                delay(500) // Pausa final
-                                                showRealAnalysisScreen = false
-                                                showResultadosAnalisis = "Análisis real completado"
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        coroutineScope.launch { 
-                                            snackbarHostState.showSnackbar("Error al procesar la imagen: ${e.message}") 
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.size(40.dp)
-                            ) {
-                                // Botón invisible pero presionable
-                                Box(
-                                    modifier = Modifier
-                                        .size(20.dp)
-                                        .background(
-                                            color = androidx.compose.ui.graphics.Color.Transparent,
-                                            shape = CircleShape
-                                        )
-                                )
-                            }
-                            
                             IconButton(
                                 onClick = { rotationAngle -= 90f },
                                 modifier = Modifier.size(40.dp)
@@ -968,8 +822,6 @@ fun CherryApp() {
                                 Text("🌐 Conectar al Servidor: Conecta con tu base de datos local")
                                 Text("📸 Tomar Foto: Captura imágenes con la cámara")
                                 Text("🖼️ Ver Galería: Visualiza las fotos que has tomado")
-                                Text("📂 Cargar Datos (JSON): Carga y visualiza tus registros")
-                                Text("📊 Datos de Plantas: Gestiona datos de plantas y gráficos")
                             }
                         }
                     }
@@ -995,13 +847,13 @@ fun CherryApp() {
                         isConnecting = isConnecting,
                         onPlantClick = { plantId ->
                             selectedPlantId = plantId
-                            pantalla = Pantalla.DatosPlantaServidor
+                            pantalla = Pantalla.DatosPlantaFiltro
                         }
                     )
                 }
 
-// Datos de la planta elegida (filtrando /plant_data)
-                if (pantalla == Pantalla.DatosPlantaServidor && selectedPlantId != null && serverInput.isNotBlank()) {
+// Datos de la planta elegida (nueva pantalla de filtros)
+                if (pantalla == Pantalla.DatosPlantaFiltro && selectedPlantId != null && serverInput.isNotBlank()) {
                     val selId = selectedPlantId!!
                     LaunchedEffect(selId) {
                         isConnecting = true
@@ -1015,15 +867,27 @@ fun CherryApp() {
                         }
                     }
 
-                    DatosPlantaServidorScreen(
+                    PlantDataFilterScreen(
                         serverInput = serverInput,
-                        selectedPlantId = selectedPlantId,
+                        selectedPlantId = selId,
                         serverPlantData = serverPlantData,
-                        isConnecting = isConnecting
+                        isConnecting = isConnecting,
+                        onViewRecords = { lista ->
+                            registrosFiltrados = lista
+                            pantalla = Pantalla.ListaRegistrosFiltrados
+                        }
                     )
                 }
 
-                // Pantalla: Conectar al servidor
+                if (pantalla == Pantalla.ListaRegistrosFiltrados) {
+                    ListaRegistrosFiltradosScreen(
+                        title = "Registros filtrados",
+                        items = registrosFiltrados,
+                        onBack = { pantalla = Pantalla.DatosPlantaFiltro }
+                    )
+                }
+
+                // Pantalla: Huertos
                 if (pantalla == Pantalla.ConectarServidor && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
                     ConectarServidorScreen(
                         serverInput = serverInput,
@@ -1064,21 +928,14 @@ fun CherryApp() {
                             showEditarHuertoDialog = true
                         },
                         onConnectClick = {
-                            // Verificar si es una IP nueva
-                            if (esIpNueva(serverInput)) {
-                                // Es una IP nueva, mostrar diálogo para agregar nombre
-                                ipTemporal = serverInput
-                                showNuevoHuertoDialog = true
-                            } else {
-                                // IP conocida, conectar directamente
-                                if (!recentServers.contains(serverInput)) {
-                                    recentServers = (listOf(serverInput) + recentServers).take(5)
+                            // Conectar directamente sin mostrar dialogs adicionales
+                            if (!recentServers.contains(serverInput)) {
+                                recentServers = (listOf(serverInput) + recentServers).take(5)
                                 saveRecentServers(recentServers)
-                                }
-                                actualizarUltimaConexion(serverInput)
-                                pantalla = Pantalla.ListaPlantasServidor
                             }
-                            },
+                            actualizarUltimaConexion(serverInput)
+                            pantalla = Pantalla.ListaPlantasServidor
+                        },
                         onTestConnection = {
                             // Implementar prueba de conexión
                                     coroutineScope.launch {
@@ -1088,7 +945,17 @@ fun CherryApp() {
                         },
                         canConnect = serverInput.contains(":") &&
                                     serverInput.split(":").size == 2 &&
-                                    serverInput.split(":")[1].all { it.isDigit() }
+                                    serverInput.split(":")[1].all { it.isDigit() },
+                        onGuardarHuerto = { nombre, ip, puerto ->
+                            val nuevoHuerto = HuertoGuardado(
+                                nombre = nombre,
+                                ip = ip,
+                                puerto = puerto.toIntOrNull() ?: 2000,
+                                ultimaConexion = System.currentTimeMillis()
+                            )
+                            huertosGuardados = huertosGuardados + nuevoHuerto
+                            saveHuertosGuardados(huertosGuardados)
+                        }
                     )
                 }
 
@@ -1115,22 +982,7 @@ fun CherryApp() {
                     )
                 }
 
-                // Pantalla de datos de plantas
-                if (pantalla == Pantalla.DatosPlantas && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
-                    PlantDataScreen(
-                        onBack = { pantalla = Pantalla.Inicio },
-                        viewModel = plantDataViewModel,
-                        onNavigateToCharts = { pantalla = Pantalla.Graficos }
-                    )
-                }
-
-                // Pantalla de gráficos
-                if (pantalla == Pantalla.Graficos && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
-                    ChartsScreen(
-                        onBack = { pantalla = Pantalla.DatosPlantas },
-                        viewModel = plantDataViewModel
-                    )
-                }
+                
 
                             // Pantalla de análisis de plantas
             if (pantalla == Pantalla.AnalisisPlanta && !showCamaraPersonalizada && imagenSeleccionada == null && showVistaPrevia == null && showResultadosAnalisis == null) {
@@ -1205,7 +1057,8 @@ fun CherryApp() {
                             // Botón de galería
                             Button(
                                 onClick = {
-                                    fotos = getFotos(FOTOS_DIR)
+                                    fotos = getFotosNormales(FOTOS_DIR)
+                                    showAnalisisEnGaleria = false
                                     pantalla = Pantalla.Galeria
                                 },
                                 modifier = Modifier
@@ -1269,7 +1122,7 @@ fun CherryApp() {
                             )
                             
                             Text(
-                                "• Enfoca el objeto dentro del recuadro\n" +
+                                "• Enfoca la hoja dentro del recuadro\n" +
                                 "• Mantén la cámara estable\n" +
                                 "• Usa buena iluminación\n" +
                                 "• Acerca la cámara al objeto",
@@ -1281,55 +1134,90 @@ fun CherryApp() {
                 }
             }
 
-                // Mostrar datos JSON
-                if (pantalla == Pantalla.MostrarDatos && !showCamaraPersonalizada && imagenSeleccionada == null) {
-                    Column(Modifier.fillMaxSize()) {
-                        if (registros.isEmpty()) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally
+                
+
+                            // Galería (moderna)
+            if (pantalla == Pantalla.Galeria && !showCamaraPersonalizada && imagenSeleccionada == null) {
+                Column(Modifier.fillMaxSize()) {
+                    // Toggle para alternar entre fotos y análisis
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        elevation = CardDefaults.cardElevation(4.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Botón Fotos
+                            Button(
+                                onClick = { 
+                                    showAnalisisEnGaleria = false
+                                    fotos = getFotosNormales(FOTOS_DIR)
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (!showAnalisisEnGaleria) 
+                                        MaterialTheme.colorScheme.primary 
+                                    else 
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
                                 ) {
-                                    Text("No hay datos para mostrar.", fontSize = 18.sp)
-                                    Spacer(Modifier.height(16.dp))
-                                    Button(
-                                        onClick = { pickJsonLauncher.launch("application/json") },
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (isSystemInDarkTheme()) DarkButton else WhiteButton,
-                                            contentColor = if (isSystemInDarkTheme()) WhiteText else BlackText
-                                        )
-                                    ) {
-                                        Text("Cargar archivo JSON")
-                                    }
+                                    Icon(
+                                        Icons.Default.PhotoLibrary,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("📸 Fotos")
                                 }
                             }
-                        } else {
-                            LazyColumn(Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 8.dp)) {
-                                items(registros.size) { i ->
-                                    val reg = registros[i]
-                                    Card(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 6.dp),
-                                        elevation = CardDefaults.cardElevation(4.dp)
-                                    ) {
-                                        Column(Modifier.padding(16.dp)) {
-                                            Text("Registro ${i + 1}", fontWeight = FontWeight.Bold)
-                                            Text("🌡️ Temperatura: ${reg.temperatura}")
-                                            Text("💧 Humedad: ${reg.humedad}")
-                                            Text("🔆 Luminosidad: ${reg.luminosidad}")
-                                        }
-                                    }
+                            
+                            Spacer(modifier = Modifier.width(8.dp))
+                            
+                            // Botón Análisis
+                            Button(
+                                onClick = { 
+                                    showAnalisisEnGaleria = true
+                                    fotos = getFotosAnalisis(FOTOS_DIR)
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (showAnalisisEnGaleria) 
+                                        MaterialTheme.colorScheme.primary 
+                                    else 
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.Analytics,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("🔬 Análisis")
                                 }
                             }
                         }
                     }
-                }
-
-                            // Galería (rediseñada con estilo moderno)
-            if (pantalla == Pantalla.Galeria && !showCamaraPersonalizada && imagenSeleccionada == null) {
-                Box(Modifier.fillMaxSize()) {
+                    
+                    // Contenido de la galería
+                    Box(Modifier.fillMaxSize()) {
                     if (fotos.isEmpty()) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Card(
@@ -1353,14 +1241,14 @@ fun CherryApp() {
                                     )
                                     Spacer(Modifier.height(16.dp))
                                     Text(
-                                        "No hay fotos tomadas",
+                                        if (showAnalisisEnGaleria) "No hay análisis guardados" else "No hay fotos tomadas",
                                         fontSize = 20.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                     Spacer(Modifier.height(8.dp))
                                     Text(
-                                        "Usa la cámara para añadir algunas fotos",
+                                        if (showAnalisisEnGaleria) "Realiza análisis de plantas para ver resultados guardados" else "Usa la cámara para añadir algunas fotos",
                                         fontSize = 14.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                         textAlign = TextAlign.Center
@@ -1455,6 +1343,7 @@ fun CherryApp() {
                             modifier = Modifier.size(28.dp)
                         )
                     }
+                }
                 }
             }
 
@@ -1939,7 +1828,7 @@ fun CherryApp() {
                                                 originalBitmap.recycle()
                                                 rotatedBitmap.recycle()
                                                 
-                                                fotos = getFotos(FOTOS_DIR)
+                                                fotos = getFotosNormales(FOTOS_DIR)
                                                 coroutineScope.launch { snackbarHostState.showSnackbar("Foto guardada en galería de la app") }
                                                 showVistaPrevia = null
                                                 rotationAngle = 0f
@@ -1999,133 +1888,86 @@ fun CherryApp() {
                                     
                                     Button(
                                         onClick = {
-                                            val currentTime = System.currentTimeMillis()
-                                            val timeDiff = currentTime - lastTapTime
-                                            
-                                            if (timeDiff < 500) {
-                                                // Doble toque - Análisis de enfermedad
-                                                isDoubleTap = true
-                                                val tempFile = File(context.cacheDir, "temp_enfermedad_${System.currentTimeMillis()}.jpg")
-                                                try {
-                                                    val originalBitmap = BitmapFactory.decodeFile(file.absolutePath)
-                                                    if (originalBitmap != null) {
-                                                        val matrix = Matrix()
-                                                        matrix.postRotate(rotationAngle)
-                                                        val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
-                                                        
-                                                        val outputStream = tempFile.outputStream()
-                                                        rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
-                                                        outputStream.close()
-                                                        
-                                                        originalBitmap.recycle()
-                                                        rotatedBitmap.recycle()
-                                                        
-                                                        // Mostrar pantalla de análisis de enfermedades
-                                                        imagenEnfermedad = tempFile
-                                                        showEnfermedadScreen = true
-                                                            showVistaPrevia = null
-                                                            rotationAngle = 0f
-                                                            imageAnalysis = null
-                                                            showAnalysisDetails = false
-                                                        
-                                                        // Iniciar simulación de análisis de enfermedades (5 segundos)
-                                                            coroutineScope.launch { 
-                                                            enfermedadProgress = 0f
-                                                            enfermedadMessage = "Iniciando análisis..."
-                                                            
-                                                            // Simular diferentes etapas del análisis (5 segundos total)
-                                                            val etapas = listOf(
-                                                                "Preparando imagen..." to 0.2f,
-                                                                "Analizando características..." to 0.4f,
-                                                                "Procesando con IA..." to 0.6f,
-                                                                "Evaluando salud de la planta..." to 0.8f,
-                                                                "Generando recomendaciones..." to 1.0f
-                                                            )
-                                                            
-                                                            etapas.forEach { (mensaje, progreso) ->
-                                                                enfermedadMessage = mensaje
-                                                                delay(1000) // 1000ms por etapa = 5 segundos total
-                                                                enfermedadProgress = progreso
-                                                            }
-                                                            
-                                                            delay(500) // Pausa final
-                                                            showEnfermedadScreen = false
-                                                            showResultadosAnalisis = "Detección completada"
-                                                        }
-                                                    }
-                                                } catch (e: Exception) {
-                                                    coroutineScope.launch { 
-                                                        snackbarHostState.showSnackbar("Error al procesar la imagen: ${e.message}") 
-                                                    }
-                                                }
-                                            } else {
-                                                // Presión normal - Análisis normal (con retraso para permitir doble toque)
-                                                coroutineScope.launch {
-                                                    delay(300) // Esperar 300ms para ver si viene un segundo toque
+                                            // Preparar la imagen para análisis real con TensorFlow
+                                            val tempFile = File(context.cacheDir, "temp_real_analysis_${System.currentTimeMillis()}.jpg")
+                                            try {
+                                                val originalBitmap = BitmapFactory.decodeFile(file.absolutePath)
+                                                if (originalBitmap != null) {
+                                                    val matrix = Matrix()
+                                                    matrix.postRotate(rotationAngle)
+                                                    val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
                                                     
-                                                    // Verificar si ha habido otro toque en este tiempo
-                                                    val timeSinceLastTap = System.currentTimeMillis() - currentTime
-                                                    if (timeSinceLastTap >= 300) {
-                                                        // No ha habido doble toque, ejecutar análisis normal
-                                                        isDoubleTap = false
-                                                        val tempFile = File(context.cacheDir, "temp_rotated_${System.currentTimeMillis()}.jpg")
-                                                        try {
-                                                            val originalBitmap = BitmapFactory.decodeFile(file.absolutePath)
+                                                    val outputStream = tempFile.outputStream()
+                                                    rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
+                                                    outputStream.close()
+                                                    
+                                                    originalBitmap.recycle()
+                                                    rotatedBitmap.recycle()
+                                                    
+                                                    // Marcar que NO viene de galería (viene de vista previa)
+                                                    analisisFromGaleria = false
+                                                    
+                                                    // Mostrar pantalla de análisis real
+                                                    imagenRealAnalysis = tempFile
+                                                    showRealAnalysisScreen = true
+                                                    showVistaPrevia = null
+                                                    rotationAngle = 0f
+                                                    imageAnalysis = null
+                                                    showAnalysisDetails = false
+                                                    
+                                                    // Iniciar análisis real con TensorFlow Lite
+                                                    coroutineScope.launch {
+                                                        realAnalysisProgress = 0f
+                                                        realAnalysisMessage = "Iniciando análisis..."
+                                                        
+                                                        // Simular carga real con diferentes etapas
+                                                        val etapas = listOf(
+                                                            "Preparando imagen..." to 0.2f,
+                                                            "Cargando modelo de IA..." to 0.4f,
+                                                            "Analizando características..." to 0.6f,
+                                                            "Procesando con TensorFlow..." to 0.8f,
+                                                            "Generando resultados..." to 1.0f
+                                                        )
+                                                        
+                                                        etapas.forEach { (mensaje, progreso) ->
+                                                            realAnalysisMessage = mensaje
+                                                            delay(800) // 800ms por etapa = 4 segundos total
+                                                            realAnalysisProgress = progreso
+                                                        }
+                                                        
+                                                        // Análisis real con TensorFlow Lite
+                                                        Log.d("TensorFlow", "Iniciando análisis real...")
+                                                        if (tensorFlowInterpreter != null) {
+                                                            Log.d("TensorFlow", "Interpreter disponible, procesando imagen...")
+                                                            val originalBitmap = BitmapFactory.decodeFile(tempFile.absolutePath)
                                                             if (originalBitmap != null) {
-                                                                val matrix = Matrix()
-                                                                matrix.postRotate(rotationAngle)
-                                                                val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
-                                                                
-                                                                val outputStream = tempFile.outputStream()
-                                                                rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
-                                                                outputStream.close()
-                                                                
+                                                                Log.d("TensorFlow", "Imagen cargada, ejecutando análisis...")
+                                                                realAnalysisResult = analyzeImageWithTensorFlow(tensorFlowInterpreter, originalBitmap)
+                                                                Log.d("TensorFlow", "Resultado del análisis: $realAnalysisResult")
                                                                 originalBitmap.recycle()
-                                                                rotatedBitmap.recycle()
-                                                                
-                                                                // Mostrar pantalla de análisis con barra de carga
-                                                                imagenAnalizada = tempFile
-                                                                showAnalisisScreen = true
-                                                            showVistaPrevia = null
-                                                            rotationAngle = 0f
-                                                            imageAnalysis = null
-                                                            showAnalysisDetails = false
-                                                                
-                                                                // Iniciar simulación de análisis
-                                                                coroutineScope.launch {
-                                                                    analisisProgress = 0f
-                                                                    analisisMessage = "Iniciando análisis..."
-                                                                    
-                                                                    // Simular diferentes etapas del análisis
-                                                                    val etapas = listOf(
-                                                                        "Preparando imagen..." to 0.2f,
-                                                                        "Analizando características..." to 0.4f,
-                                                                        "Procesando con IA..." to 0.6f,
-                                                                        "Evaluando salud de la planta..." to 0.8f,
-                                                                        "Generando recomendaciones..." to 1.0f
-                                                                    )
-                                                                    
-                                                                    etapas.forEach { (mensaje, progreso) ->
-                                                                        analisisMessage = mensaje
-                                                                        delay(600) // 600ms por etapa = 3 segundos total
-                                                                        analisisProgress = progreso
-                                                                    }
-                                                                    
-                                                                    delay(500) // Pausa final
-                                                                    showAnalisisScreen = false
-                                                                    showResultadosAnalisis = "Análisis completado"
-                                                                }
-                                                    }
-                                                } catch (e: Exception) {
-                                                    coroutineScope.launch { 
-                                                        snackbarHostState.showSnackbar("Error al procesar la imagen: ${e.message}") 
+                                                            } else {
+                                                                Log.e("TensorFlow", "No se pudo cargar la imagen")
+                                                            }
+                                                        } else {
+                                                            Log.e("TensorFlow", "Interpreter es null, usando fallback")
+                                                            // Fallback si no se puede cargar el modelo
+                                                            realAnalysisResult = DiseasePrediction(
+                                                                prediction = "Error: Modelo no disponible",
+                                                                confidence = 0.0f,
+                                                                preventionMeasures = listOf("No se pudo cargar el modelo de IA.")
+                                                            )
+                                                        }
+                                                        
+                                                        delay(500) // Pausa final
+                                                        showRealAnalysisScreen = false
+                                                        showResultadosAnalisis = "Análisis real completado"
                                                     }
                                                 }
-                                            }
+                                            } catch (e: Exception) {
+                                                coroutineScope.launch { 
+                                                    snackbarHostState.showSnackbar("Error al procesar la imagen: ${e.message}") 
                                                 }
                                             }
-                                            
-                                            lastTapTime = currentTime
                                         },
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = MaterialTheme.colorScheme.secondary,
@@ -2155,24 +1997,6 @@ fun CherryApp() {
                             }
                         }
                     }
-                }
-
-                // Pantalla de análisis con barra de carga
-                if (showAnalisisScreen) {
-                    AnalisisScreen(
-                        progress = analisisProgress,
-                        message = analisisMessage,
-                        imagen = imagenAnalizada
-                    )
-                }
-
-                // Pantalla de análisis de enfermedades con barra de carga
-                if (showEnfermedadScreen) {
-                    EnfermedadScreen(
-                        progress = enfermedadProgress,
-                        message = enfermedadMessage,
-                        imagen = imagenEnfermedad
-                    )
                 }
 
                 // Pantalla de análisis real con TensorFlow Lite
@@ -2226,7 +2050,7 @@ fun CherryApp() {
                                             outputStream.close()
                                             bitmap.recycle()
                                             
-                                            fotos = getFotos(FOTOS_DIR)
+                                            fotos = getFotosAnalisis(FOTOS_DIR)
                                             snackbarHostState.showSnackbar("Captura completa del análisis guardada en galería")
                                         } else {
                                             snackbarHostState.showSnackbar("Error al crear captura del análisis")
@@ -2279,26 +2103,10 @@ fun CherryApp() {
                                 }
                             }
                         )
-                    } else if (imagenEnfermedad != null) {
-                        ResultadosEnfermedadScreen(
-                            imagen = imagenEnfermedad,
-                            onBack = { 
-                                showResultadosAnalisis = null
-                                // Regresar a la vista previa de la foto
-                                showVistaPrevia = imagenEnfermedad
-                                imagenEnfermedad = null
-                            }
-                        )
                     } else {
-                        ResultadosAnalisisScreen(
-                            imagen = imagenAnalizada,
-                            onBack = { 
-                                showResultadosAnalisis = null
-                                // Regresar a la vista previa de la foto
-                                showVistaPrevia = imagenAnalizada
-                                imagenAnalizada = null
-                            }
-                        )
+                        // Solo mostrar resultados reales
+                        // Esto no debería ejecutarse ya que realAnalysisResult debería estar disponible
+                        Log.w("Resultados", "No hay resultados de análisis disponibles")
                     }
                 }
 
@@ -2315,103 +2123,7 @@ fun CherryApp() {
                 }
                 
                 // Diálogo para nuevo huerto
-                if (showNuevoHuertoDialog) {
-                    AlertDialog(
-                        onDismissRequest = { 
-                            showNuevoHuertoDialog = false
-                            pantalla = Pantalla.ConectarServidor
-                        },
-                        title = { Text("🌱 Nuevo Huerto Detectado") },
-                        text = { Text("¿Deseas agregar un nombre a este huerto para futuras conexiones?") },
-                        confirmButton = {
-                            TextButton(
-                                onClick = { 
-                                    showNuevoHuertoDialog = false
-                                    showNombreHuertoDialog = true
-                                }
-                            ) {
-                                Text("Sí")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = { 
-                                    // Ir directo a plantas sin guardar
-                                    if (!recentServers.contains(ipTemporal)) {
-                                        recentServers = (listOf(ipTemporal) + recentServers).take(5)
-                                        saveRecentServers(recentServers)
-                                    }
-                                    pantalla = Pantalla.ListaPlantasServidor
-                                    showNuevoHuertoDialog = false
-                                }
-                            ) {
-                                Text("No")
-                            }
-                        }
-                    )
-                }
                 
-                // Diálogo para nombre del huerto
-                if (showNombreHuertoDialog) {
-                    AlertDialog(
-                        onDismissRequest = { 
-                            showNombreHuertoDialog = false
-                            pantalla = Pantalla.ConectarServidor
-                        },
-                        title = { Text("📝 Nombre del Huerto") },
-                        text = {
-                            Column {
-                                Text("Escribe un nombre para tu huerto (máximo 20 caracteres):")
-                                Spacer(modifier = Modifier.height(8.dp))
-                                OutlinedTextField(
-                                    value = nombreHuerto,
-                                    onValueChange = { 
-                                        if (it.length <= 20) nombreHuerto = it
-                                    },
-                                    label = { Text("Nombre del huerto") },
-                                    placeholder = { Text("Mi Huerto de Tomates") },
-                                    singleLine = true
-                                )
-                                Text(
-                                    text = "${nombreHuerto.length}/20",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (nombreHuerto.length > 20) Color.Red else Color.Gray
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            TextButton(
-                                onClick = { 
-                                    if (nombreHuerto.isNotBlank()) {
-                                        guardarHuerto(nombreHuerto, ipTemporal)
-                                        if (!recentServers.contains(ipTemporal)) {
-                                            recentServers = (listOf(ipTemporal) + recentServers).take(5)
-                                            saveRecentServers(recentServers)
-                                        }
-                                        actualizarUltimaConexion(ipTemporal)
-                                        pantalla = Pantalla.ListaPlantasServidor
-                                        showNombreHuertoDialog = false
-                                        nombreHuerto = ""
-                                        ipTemporal = ""
-                                    }
-                                },
-                                enabled = nombreHuerto.isNotBlank()
-                            ) {
-                                Text("Guardar")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = { 
-                                    showNombreHuertoDialog = false
-                                    pantalla = Pantalla.ConectarServidor
-                                }
-                            ) {
-                                Text("Cancelar")
-                            }
-                        }
-                    )
-                }
                 
                 // Diálogo para editar huerto
                 if (showEditarHuertoDialog && huertoEditando != null) {
@@ -2533,7 +2245,7 @@ fun CherryApp() {
                         confirmButton = {
                             Button(onClick = {
                                 if (fileToDelete.delete()) {
-                                    fotos = getFotos(FOTOS_DIR)
+                                    fotos = if (showAnalisisEnGaleria) getFotosAnalisis(FOTOS_DIR) else getFotosNormales(FOTOS_DIR)
                                     if (imagenSeleccionada == fileToDelete) {
                                         imagenSeleccionada = null
                                     }
@@ -3189,7 +2901,7 @@ fun RecommendationItem(text: String, iconColor: androidx.compose.ui.graphics.Col
 
 // Funciones para TensorFlow Lite
 fun loadTensorFlowModel(context: Context): Interpreter? {
-    return try {
+    try {
         Log.d("TensorFlow", "Iniciando carga del modelo...")
         
         val modelFile = File(context.getExternalFilesDir(null), "tomato.tflite")
@@ -3197,27 +2909,39 @@ fun loadTensorFlowModel(context: Context): Interpreter? {
         
         if (!modelFile.exists()) {
             Log.d("TensorFlow", "Modelo no existe, copiando desde assets...")
-            // Copiar desde assets si no existe
-            context.assets.open("tomato.tflite").use { input ->
-                modelFile.outputStream().use { output ->
-                    input.copyTo(output)
+            try {
+                context.assets.open("tomato.tflite").use { input ->
+                    modelFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
                 }
+                Log.d("TensorFlow", "Modelo copiado exitosamente")
+            } catch (e: Exception) {
+                Log.e("TensorFlow", "Error copiando modelo: ${e.message}")
+                e.printStackTrace()
+                return null
             }
-            Log.d("TensorFlow", "Modelo copiado exitosamente")
         } else {
             Log.d("TensorFlow", "Modelo ya existe en: ${modelFile.absolutePath}")
         }
         
-        val options = Interpreter.Options()
-        options.setNumThreads(4) // Usar 4 hilos para mejor rendimiento
+        if (!modelFile.exists()) {
+            Log.e("TensorFlow", "Modelo aún no existe después de intentar copiarlo")
+            return null
+        }
         
+        val options = Interpreter.Options()
+        options.setNumThreads(4)
+        
+        Log.d("TensorFlow", "Creando Interpreter con archivo: ${modelFile.absolutePath}")
         val interpreter = Interpreter(modelFile, options)
-        Log.d("TensorFlow", "Modelo cargado exitosamente!")
-        interpreter
-    } catch (e: Exception) {
-        Log.e("TensorFlow", "Error cargando modelo: ${e.message}")
+        Log.d("TensorFlow", "✅ Modelo cargado exitosamente!")
+        return interpreter
+    } catch (e: Throwable) {
+        Log.e("TensorFlow", "❌ Error cargando modelo: ${e.javaClass.simpleName}")
+        Log.e("TensorFlow", "Mensaje: ${e.message}")
         e.printStackTrace()
-        null
+        return null
     }
 }
 
@@ -3228,8 +2952,8 @@ fun analyzeImageWithTensorFlow(interpreter: Interpreter, bitmap: Bitmap): Diseas
         Log.d("TensorFlow", "Iniciando análisis de imagen...")
         Log.d("TensorFlow", "Tamaño original de imagen: ${bitmap.width}x${bitmap.height}")
         
-        // Redimensionar imagen a 256x256
-        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 256, 256, true)
+        // Redimensionar imagen a 128x128 (resolución del modelo entrenado)
+        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 128, 128, true)
         Log.d("TensorFlow", "Imagen redimensionada a: ${resizedBitmap.width}x${resizedBitmap.height}")
         
         // Obtener información del modelo
@@ -3243,10 +2967,10 @@ fun analyzeImageWithTensorFlow(interpreter: Interpreter, bitmap: Bitmap): Diseas
         Log.d("TensorFlow", "Buffer de entrada creado con tamaño: ${inputBuffer.buffer.capacity()} bytes")
         
         // Convertir bitmap a array de floats
-        val pixels = IntArray(256 * 256)
-        resizedBitmap.getPixels(pixels, 0, 256, 0, 0, 256, 256)
+        val pixels = IntArray(128 * 128)
+        resizedBitmap.getPixels(pixels, 0, 128, 0, 0, 128, 128)
         
-        val floatArray = FloatArray(256 * 256 * 3)
+        val floatArray = FloatArray(128 * 128 * 3)
         var pixelIndex = 0
         for (i in pixels.indices) {
             val pixel = pixels[i]
@@ -3662,6 +3386,28 @@ fun getFotos(directory: File): List<File> {
     }?.sortedDescending()?.toList() ?: emptyList<File>().also {
         Log.d("getFotos", "No se encontraron archivos jpg/jpeg en ${directory.absolutePath}")
     }
+}
+
+fun getFotosNormales(directory: File): List<File> {
+    if (!directory.exists() || !directory.isDirectory) {
+        return emptyList()
+    }
+    return directory.listFiles { file ->
+        file.isFile && 
+        (file.extension.equals("jpg", ignoreCase = true) || file.extension.equals("jpeg", ignoreCase = true)) &&
+        !file.name.startsWith("ANALISIS_")
+    }?.sortedDescending()?.toList() ?: emptyList()
+}
+
+fun getFotosAnalisis(directory: File): List<File> {
+    if (!directory.exists() || !directory.isDirectory) {
+        return emptyList()
+    }
+    return directory.listFiles { file ->
+        file.isFile && 
+        (file.extension.equals("jpg", ignoreCase = true) || file.extension.equals("jpeg", ignoreCase = true)) &&
+        file.name.startsWith("ANALISIS_")
+    }?.sortedDescending()?.toList() ?: emptyList()
 }
 
 // Función para analizar planta enviando foto al servidor

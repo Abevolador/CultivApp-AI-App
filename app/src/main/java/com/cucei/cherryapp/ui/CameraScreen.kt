@@ -384,12 +384,12 @@ fun takeFocusedPhoto(
                         // Recortar la imagen al área del recuadro
                         val croppedBitmap = Bitmap.createBitmap(originalBitmap, x, y, cropSize, cropSize)
                         
-                        // Redimensionar a 256x256
-                        val finalBitmap = Bitmap.createScaledBitmap(croppedBitmap, 256, 256, true)
+                        // Redimensionar a 512x512 (mayor calidad antes de enviar al modelo)
+                        val finalBitmap = Bitmap.createScaledBitmap(croppedBitmap, 512, 512, true)
                         
-                        // Guardar la imagen final
+                        // Guardar la imagen final con calidad máxima (95)
                         val outputStream = photoFile.outputStream()
-                        finalBitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
+                        finalBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                         outputStream.close()
                         
                         // Liberar memoria
