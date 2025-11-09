@@ -127,6 +127,10 @@ import com.cucei.cherryapp.ui.theme.WhiteText
 import com.cucei.cherryapp.getServerPlants
 import com.cucei.cherryapp.getServerPlantData
 import com.cucei.cherryapp.testServerConnection
+import com.cucei.cherryapp.getLastPlantRecord
+import com.cucei.cherryapp.getPlantAlerts
+import com.cucei.cherryapp.PlantLastRecord
+import com.cucei.cherryapp.PlantAlert
 import com.cucei.cherryapp.ConectarServidorScreen
 import com.cucei.cherryapp.ListaPlantasServidorScreen
 import com.cucei.cherryapp.DatosPlantaServidorScreen
@@ -240,6 +244,9 @@ fun CherryApp() {
     var capturaFile by remember { mutableStateOf<File?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
     
+    // Variable para AlertDialog de restricción de análisis
+    var showAnalysisRestrictionDialog by remember { mutableStateOf(false) }
+    
     // --- Estado para Huertos ---
     var serverInput by remember { mutableStateOf("") } // Ej: 192.168.100.26:2000
     var recentServers by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -257,6 +264,12 @@ fun CherryApp() {
     var huertoEditando by remember { mutableStateOf<HuertoGuardado?>(null) }
     var nuevoNombreHuerto by remember { mutableStateOf("") }
     var showEliminarHuertoDialog by remember { mutableStateOf(false) }
+    
+    // --- Estado para forzar actualización de nombres de plantas ---
+    var plantNamesUpdateKey by remember { mutableStateOf(0) }
+    
+    // --- Estado para últimos registros de plantas (caché) ---
+    var plantLastRecords by remember { mutableStateOf<Map<String, PlantLastRecord>>(emptyMap()) }
 
     // Navigation Drawer state
     var drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -350,6 +363,32 @@ fun CherryApp() {
     
     fun obtenerNombreHuerto(serverInput: String): String? {
         return huertosGuardados.find { "${it.ip}:${it.puerto}" == serverInput }?.nombre
+    }
+    
+    // Funciones para manejar nombres personalizados de plantas
+    fun savePlantName(plantId: String, nombre: String) {
+        val sharedPrefs = context.getSharedPreferences("CultivAppPrefs", Context.MODE_PRIVATE)
+        val editor = sharedPrefs.edit()
+        
+        // Si el nombre está vacío, eliminar la entrada para restaurar el ID original
+        if (nombre.isBlank()) {
+            editor.remove("plant_name_$plantId")
+        } else {
+            editor.putString("plant_name_$plantId", nombre)
+        }
+        editor.apply()
+    }
+    
+    fun loadPlantName(plantId: String): String? {
+        val sharedPrefs = context.getSharedPreferences("CultivAppPrefs", Context.MODE_PRIVATE)
+        val nombre = sharedPrefs.getString("plant_name_$plantId", null)
+        // Si el nombre está vacío, tratarlo como null para mostrar el ID original
+        return if (nombre.isNullOrBlank()) null else nombre
+    }
+    
+    fun getPlantDisplayName(plantId: String): String {
+        val nombrePersonalizado = loadPlantName(plantId)
+        return nombrePersonalizado ?: plantId
     }
 
     // Para el doble toque para salir y Snackbar
@@ -840,16 +879,56 @@ fun CherryApp() {
                             isConnecting = false
                         }
                     }
-
-                    ListaPlantasServidorScreen(
-                        serverInput = serverInput,
-                        serverPlants = serverPlants,
-                        isConnecting = isConnecting,
-                        onPlantClick = { plantId ->
-                            selectedPlantId = plantId
-                            pantalla = Pantalla.DatosPlantaFiltro
+                    
+                    // Cargar últimos registros de sensores en segundo plano
+                    LaunchedEffect(serverPlants.map { it.plant_id }.joinToString()) {
+                        if (serverPlants.isNotEmpty()) {
+                            coroutineScope.launch(Dispatchers.IO) {
+                                val newRecords = mutableMapOf<String, PlantLastRecord>()
+                                
+                                serverPlants.forEach { plant ->
+                                    try {
+                                        val cachedRecord = plantLastRecords[plant.plant_id]
+                                        val lastRecord = getLastPlantRecord(
+                                            serverInput = serverInput,
+                                            plantId = plant.plant_id,
+                                            cachedRecord = cachedRecord,
+                                            cacheTimeoutMs = 60000 // 1 minuto
+                                        )
+                                        newRecords[plant.plant_id] = lastRecord
+                                    } catch (e: Exception) {
+                                        Log.e("PlantAlerts", "Error obteniendo último registro para ${plant.plant_id}: ${e.message}")
+                                    }
+                                }
+                                
+                                // Actualizar estado en el hilo principal
+                                withContext(Dispatchers.Main) {
+                                    plantLastRecords = newRecords
+                                }
+                            }
                         }
-                    )
+                    }
+
+                    key(plantNamesUpdateKey) {
+                        ListaPlantasServidorScreen(
+                            serverInput = serverInput,
+                            serverPlants = serverPlants,
+                            isConnecting = isConnecting,
+                            onPlantClick = { plantId ->
+                                selectedPlantId = plantId
+                                pantalla = Pantalla.DatosPlantaFiltro
+                            },
+                            getPlantDisplayName = { plantId -> getPlantDisplayName(plantId) },
+                            onEditPlantName = { plantId, nuevoNombre ->
+                                savePlantName(plantId, nuevoNombre)
+                                plantNamesUpdateKey++ // Forzar recomposición
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("Nombre de planta guardado")
+                                }
+                            },
+                            plantLastRecords = plantLastRecords
+                        )
+                    }
                 }
 
 // Datos de la planta elegida (nueva pantalla de filtros)
@@ -1469,6 +1548,12 @@ fun CherryApp() {
                                 
                                 IconButton(
                                     onClick = {
+                                        // Validar que no sea una imagen de análisis previo
+                                        if (file.name.startsWith("ANALISIS_")) {
+                                            showAnalysisRestrictionDialog = true
+                                            return@IconButton
+                                        }
+                                        
                                         // Preparar la imagen para análisis real
                                         val tempFile = File(context.cacheDir, "temp_real_analysis_${System.currentTimeMillis()}.jpg")
                                         try {
@@ -1888,6 +1973,12 @@ fun CherryApp() {
                                     
                                     Button(
                                         onClick = {
+                                            // Validar que no sea una imagen de análisis previo
+                                            if (file.name.startsWith("ANALISIS_")) {
+                                                showAnalysisRestrictionDialog = true
+                                                return@Button
+                                            }
+                                            
                                             // Preparar la imagen para análisis real con TensorFlow
                                             val tempFile = File(context.cacheDir, "temp_real_analysis_${System.currentTimeMillis()}.jpg")
                                             try {
@@ -2069,7 +2160,7 @@ fun CherryApp() {
                                 coroutineScope.launch {
                                     try {
                                         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                                        val tempFile = File(context.cacheDir, "ANALISIS_COMPARTIR_${timestamp}.jpg")
+                                        val tempFile = File(FOTOS_DIR, "ANALISIS_COMPARTIR_${timestamp}.jpg")
                                         
                                         // Crear captura completa del análisis
                                         val density = Density(context)
@@ -2081,8 +2172,8 @@ fun CherryApp() {
                                             outputStream.close()
                                             bitmap.recycle()
                                             
-                                            // Compartir la captura usando URI directo
-                                            val uri = Uri.fromFile(tempFile)
+                                            // Compartir la captura usando FileProvider
+                                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", tempFile)
                                             val sendIntent: Intent = Intent().apply {
                                                 action = Intent.ACTION_SEND
                                                 putExtra(Intent.EXTRA_STREAM, uri)
@@ -2118,6 +2209,22 @@ fun CherryApp() {
                         text = { Text(error ?: "Ocurrió un error desconocido.") },
                         confirmButton = {
                             Button(onClick = { showError = false; error = null }) { Text("OK") }
+                        }
+                    )
+                }
+                
+                // Diálogo de restricción para análisis de imágenes previas
+                if (showAnalysisRestrictionDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showAnalysisRestrictionDialog = false },
+                        title = { Text("⚠️ Imagen no analizable") },
+                        text = { 
+                            Text("Esta imagen es un resultado de análisis previo y no se puede analizar nuevamente. Por favor, selecciona una foto original para realizar el análisis con IA.") 
+                        },
+                        confirmButton = {
+                            Button(onClick = { showAnalysisRestrictionDialog = false }) { 
+                                Text("Aceptar") 
+                            }
                         }
                     )
                 }
@@ -3029,55 +3136,76 @@ fun analyzeImageWithTensorFlow(interpreter: Interpreter, bitmap: Bitmap): Diseas
         // Obtener medidas de prevención en español
         val preventionMeasures = when (predictedClass) {
             "Tomato_Bacterial_spot" -> listOf(
-                "Prevén la mancha bacteriana usando semillas libres de la enfermedad.",
-                "Implementa la rotación de cultivos para reducir la prevalencia de la enfermedad.",
-                "Aplica fungicidas a base de cobre para controlar la enfermedad."
+                "Elimina inmediatamente las hojas y frutos infectados para evitar la propagación de la bacteria.",
+                "Usa semillas certificadas libres de patógenos y considera variedades resistentes a mancha bacteriana.",
+                "Aplica fungicidas a base de cobre (oxicloruro de cobre o hidróxido de cobre) cada 7-10 días, especialmente en condiciones húmedas.",
+                "Implementa rotación de cultivos de al menos 3 años, evitando plantar tomates en la misma área donde hubo infección.",
+                "Riega en la base de las plantas usando sistemas de goteo para mantener las hojas secas y reducir la dispersión de la bacteria."
             )
             "Tomato_Early_blight" -> listOf(
-                "Prevén el tizón temprano practicando una buena higiene del jardín.",
-                "Asegúrate de un riego adecuado para evitar salpicar tierra en las hojas.",
-                "Aplica fungicidas según sea necesario para controlar la enfermedad."
+                "Retira y destruye las hojas enfermas tan pronto como las detectes para reducir el inóculo de la enfermedad.",
+                "Asegura un espaciado adecuado entre plantas (60-90 cm) para mejorar la circulación de aire y reducir la humedad foliar.",
+                "Aplica fungicidas protectores como clorotalonil o mancozeb preventivamente, comenzando 2-3 semanas después del trasplante.",
+                "Utiliza acolchado (mulch) orgánico alrededor de las plantas para prevenir salpicaduras de tierra que contienen esporas del patógeno.",
+                "Riega temprano en la mañana para que las hojas se sequen rápidamente, evitando períodos prolongados de humedad que favorecen la enfermedad."
             )
             "Tomato_Late_blight" -> listOf(
-                "Prevén el tizón tardío proporcionando buena circulación de aire en tu jardín o invernadero.",
-                "Evita el riego por aspersión, ya que las hojas húmedas pueden favorecer la enfermedad.",
-                "Aplica fungicidas cuando sea necesario para manejar la enfermedad."
+                "Destruye completamente todas las plantas infectadas quemándolas o enterrándolas profundamente, nunca las uses en compost.",
+                "Mantén un excelente flujo de aire entre plantas con espaciados de 90 cm o más y poda las hojas inferiores que toquen el suelo.",
+                "Aplica fungicidas sistémicos como mefenoxam o clorotalonil preventivamente cuando las condiciones sean favorables (humedad alta, temperaturas frescas).",
+                "Evita el riego por aspersión; utiliza riego por goteo y riega solo en la base de las plantas en las primeras horas del día.",
+                "Inspecciona diariamente durante períodos húmedos y aplica tratamientos de emergencia si detectas los primeros síntomas (manchas aceitosas en hojas)."
             )
             "Tomato_Leaf_Mold" -> listOf(
-                "Prevén el moho de las hojas asegurando buena circulación de aire y espaciado entre plantas.",
-                "Evita mojar las hojas al regar, y riega el suelo en su lugar.",
-                "Aplica fungicidas si la enfermedad está presente y empeorando."
+                "Mejora significativamente la ventilación en invernaderos abriendo ventanas laterales y usando ventiladores para reducir la humedad relativa por debajo del 85%.",
+                "Mantén un espaciado de 60-75 cm entre plantas y poda las hojas inferiores para aumentar la circulación de aire alrededor del follaje.",
+                "Riega temprano en la mañana usando riego por goteo en la base de las plantas, nunca mojes el follaje directamente.",
+                "Aplica fungicidas como azoxystrobin o clorotalonil cuando detectes los primeros signos de la enfermedad o en condiciones de alta humedad.",
+                "Elimina las hojas gravemente infectadas y considera variedades resistentes a moho foliar si cultivas en condiciones de alta humedad."
             )
             "Tomato_Septoria_leaf_spot" -> listOf(
-                "Prevén la mancha foliar de Septoria manteniendo una buena higiene del jardín.",
-                "Evita el riego por aspersión para mantener las hojas secas.",
-                "Aplica fungicidas si la enfermedad se convierte en un problema."
+                "Elimina todas las hojas infectadas de la planta y del suelo, especialmente al final de la temporada, ya que el hongo sobrevive en los restos vegetales.",
+                "Usa acolchado plástico o orgánico para prevenir que las esporas del suelo salpiquen hacia las hojas durante el riego o la lluvia.",
+                "Practica la rotación de cultivos de 2-3 años con plantas no relacionadas (evita pimientos, papas y berenjenas) para reducir la población del patógeno.",
+                "Aplica fungicidas protectores como clorotalonil o mancozeb cada 7-14 días durante períodos de alta humedad o lluvia frecuente.",
+                "Riega en la base de las plantas temprano en la mañana para que el follaje permanezca seco el mayor tiempo posible durante el día."
             )
             "Tomato_Spider_mites_Two_spotted_spider_mite" -> listOf(
-                "Prevén las infestaciones de ácaros inspeccionando regularmente tus plantas en busca de signos de infestación.",
-                "Aumenta la humedad en el área de cultivo para desalentar los ácaros.",
-                "Usa jabón insecticida o aceite de neem para controlar los ácaros si es necesario."
+                "Inspecciona regularmente el envés de las hojas buscando ácaros, telarañas finas y manchas amarillentas; actúa rápidamente al detectarlos.",
+                "Aumenta la humedad ambiental rociando agua sobre las hojas (solo si no hay otras enfermedades fúngicas) o usando humidificadores, ya que los ácaros prefieren ambientes secos.",
+                "Aplica tratamientos con jabón insecticida, aceite de neem o aceite hortícola cubriendo especialmente el envés de las hojas donde se concentran los ácaros.",
+                "Introduce depredadores naturales como ácaros fitoseidos (Phytoseiulus persimilis) si estás en invernadero para control biológico a largo plazo.",
+                "Elimina las hojas gravemente infestadas y evita el uso excesivo de fertilizantes nitrogenados que promueven brotes tiernos preferidos por los ácaros."
             )
             "Tomato__Target_Spot" -> listOf(
-                "Prevén la mancha objetivo asegurando buena circulación de aire y evitando el hacinamiento de plantas.",
-                "Riega en la base de las plantas, manteniendo las hojas secas.",
-                "Aplica fungicidas según sea necesario para controlar la enfermedad."
+                "Elimina y destruye todas las hojas infectadas para reducir el inóculo del hongo y prevenir la propagación a hojas sanas.",
+                "Mantén un espaciado adecuado de 75-90 cm entre plantas para mejorar la circulación de aire y reducir la humedad foliar que favorece el desarrollo del hongo.",
+                "Riega únicamente en la base de las plantas usando sistemas de goteo, evitando mojar el follaje especialmente durante las horas de la tarde.",
+                "Aplica fungicidas protectores como clorotalonil o azoxystrobin cada 10-14 días, comenzando cuando las plantas estén bien establecidas.",
+                "Practica la rotación de cultivos y elimina completamente los restos vegetales al final de la temporada para reducir las fuentes de inóculo para el próximo cultivo."
             )
             "Tomato__Tomato_YellowLeaf__Curl_Virus" -> listOf(
-                "Prevén el Virus del Rizado Amarillo de la Hoja del Tomate usando plantas de tomate libres de virus.",
-                "Controla las moscas blancas, que transmiten el virus, con insecticidas.",
-                "Elimina y destruye las plantas infectadas para prevenir la propagación de la enfermedad."
+                "Elimina y quema inmediatamente todas las plantas infectadas para prevenir que las moscas blancas transmitan el virus a plantas sanas.",
+                "Instala mallas anti-insectos (malla 50 mesh) en invernaderos y usa trampas amarillas pegajosas para monitorear y reducir la población de moscas blancas.",
+                "Controla las moscas blancas con insecticidas sistémicos como imidacloprid o pimetrozina, aplicándolos según las recomendaciones del producto.",
+                "Siembra variedades resistentes al virus del rizado amarillo cuando sea posible, ya que ofrecen la mejor protección contra esta enfermedad devastadora.",
+                "Evita plantar cerca de campos con cultivos hospedantes de moscas blancas y destruye las malas hierbas que pueden servir como reservorios del virus."
             )
             "Tomato__Tomato_mosaic_virus" -> listOf(
-                "Prevén el virus del mosaico del tomate usando semillas libres de virus y variedades de tomate resistentes a enfermedades.",
-                "Controla los pulgones, que transmiten el virus, con insecticidas.",
-                "Elimina y destruye las plantas infectadas para prevenir una mayor propagación."
+                "Destruye completamente las plantas infectadas y no uses sus frutos o semillas, ya que el virus puede transmitirse a través de ellos.",
+                "Usa únicamente semillas certificadas libres de virus y considera variedades resistentes al virus del mosaico para futuras plantaciones.",
+                "Controla los pulgones que transmiten el virus aplicando jabones insecticidas, aceites o piretroides cuando detectes su presencia.",
+                "Lava tus manos y desinfecta todas las herramientas de jardín con una solución de lejía al 10% después de tocar plantas infectadas para evitar la transmisión mecánica.",
+                "Elimina las malas hierbas cercanas que pueden ser hospedantes del virus y de los pulgones, y mantén el área de cultivo libre de restos vegetales infectados."
             )
             "Tomato_healthy" -> listOf(
-                "Si tu planta de tomate está saludable, continúa monitoreando regularmente plagas y enfermedades.",
-                "Sigue buenas prácticas de jardinería, incluyendo riego, fertilización y mantenimiento adecuados."
+                "Continúa con las prácticas preventivas: monitorea regularmente tus plantas buscando signos tempranos de enfermedades o plagas para actuar rápidamente si aparecen.",
+                "Mantén un programa de riego consistente (1-2 veces por semana, según el clima) en la base de las plantas, evitando el estrés hídrico que debilita las defensas naturales.",
+                "Aplica fertilizantes balanceados cada 3-4 semanas durante la temporada de crecimiento, prestando atención a niveles adecuados de nitrógeno, fósforo y potasio.",
+                "Poda las hojas inferiores que toquen el suelo y mantén el área alrededor de las plantas libre de malezas para reducir el riesgo de enfermedades y mejorar la circulación de aire.",
+                "Considera aplicar tratamientos preventivos con fungicidas suaves o productos orgánicos como azufre en polvo durante períodos de alta humedad para proteger la salud continua de las plantas."
             )
-            else -> listOf("No hay medidas de prevención disponibles para esta condición.")
+            else -> listOf("No hay medidas de prevención disponibles para esta condición. Consulta con un especialista en agricultura para obtener recomendaciones específicas.")
         }
         
         Log.d("TensorFlow", "Análisis completado exitosamente")
@@ -3111,6 +3239,48 @@ fun captureScreen(
     }
 }
 
+// Función auxiliar para dividir texto en líneas según el ancho disponible
+fun breakTextIntoLines(paint: android.graphics.Paint, text: String, maxWidth: Int): List<String> {
+    val lines = mutableListOf<String>()
+    val words = text.split(" ")
+    var currentLine = ""
+    
+    for (word in words) {
+        val testLine = if (currentLine.isEmpty()) word else "$currentLine $word"
+        val width = paint.measureText(testLine)
+        
+        if (width <= maxWidth) {
+            currentLine = testLine
+        } else {
+            if (currentLine.isNotEmpty()) {
+                lines.add(currentLine)
+            }
+            // Si una sola palabra es más ancha que el máximo, la dividimos
+            if (paint.measureText(word) > maxWidth) {
+                // Dividir palabra muy larga (aunque esto es raro en español)
+                var remainingWord = word
+                while (remainingWord.isNotEmpty() && paint.measureText(remainingWord) > maxWidth) {
+                    var charCount = remainingWord.length - 1
+                    while (charCount > 0 && paint.measureText(remainingWord.substring(0, charCount)) > maxWidth) {
+                        charCount--
+                    }
+                    lines.add(remainingWord.substring(0, charCount))
+                    remainingWord = remainingWord.substring(charCount)
+                }
+                currentLine = remainingWord
+            } else {
+                currentLine = word
+            }
+        }
+    }
+    
+    if (currentLine.isNotEmpty()) {
+        lines.add(currentLine)
+    }
+    
+    return lines.ifEmpty { listOf(text) } // Si no se pudo dividir, devolver el texto original
+}
+
 // Función para crear captura completa del análisis
 fun createAnalysisScreenshot(
     context: Context,
@@ -3134,10 +3304,35 @@ fun createAnalysisScreenshot(
             totalHeight += 250 + cardSpacing // Imagen + espacio
         }
         
+        // Calcular altura de recomendaciones primero
+        val recTextPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.parseColor("#424242")
+            textSize = 24f
+            isAntiAlias = true
+        }
+        val maxTextWidth = width - (padding * 2) - 40
+        var recommendationsHeight = 70f // Altura inicial del título y padding
+        resultado.preventionMeasures.take(5).forEach { measure ->
+            val fullText = "• $measure"
+            val lines = breakTextIntoLines(recTextPaint, fullText, maxTextWidth)
+            recommendationsHeight += lines.size * 32f + 8f // 32px por línea + 8px espacio entre recomendaciones
+        }
+        recommendationsHeight += 20f // Padding final
+        
+        // Calcular altura del estado también
+        val statusTextPaint = android.graphics.Paint().apply {
+            textSize = 32f
+            isAntiAlias = true
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        val statusText = if (resultado.prediction == "Tomato_healthy") "Estado: Saludable" else "Enfermedad: ${traducirEnfermedad(resultado.prediction)}"
+        val statusLinesCount = breakTextIntoLines(statusTextPaint, statusText, width - (padding * 2) - 40).size
+        val statusHeight = maxOf(60, (statusLinesCount * 40) + 20)
+        
         // Altura de las tarjetas de información
-        totalHeight += 80 + cardSpacing // Estado de la planta
+        totalHeight += statusHeight + cardSpacing // Estado de la planta (calculada)
         totalHeight += 80 + cardSpacing // Confianza
-        totalHeight += 200 + cardSpacing // Recomendaciones (estimado)
+        totalHeight += recommendationsHeight.toInt() + cardSpacing // Recomendaciones (calculada)
         totalHeight += 100 + cardSpacing // Información adicional
         
         totalHeight += footerHeight + padding
@@ -3197,16 +3392,9 @@ fun createAnalysisScreenshot(
             }
         }
         
-        // Estado de la planta
+        // Estado de la planta (usar variables ya calculadas)
         val isHealthy = resultado.prediction == "Tomato_healthy"
         val statusColor = if (isHealthy) android.graphics.Color.parseColor("#4CAF50") else android.graphics.Color.parseColor("#F44336")
-        val statusText = if (isHealthy) "Estado: Saludable" else "Enfermedad: ${traducirEnfermedad(resultado.prediction)}"
-        
-        val cardPaint = android.graphics.Paint().apply {
-            color = statusColor
-            isAntiAlias = true
-        }
-        canvas.drawRoundRect(padding.toFloat(), currentY.toFloat(), (width - padding).toFloat(), (currentY + 60).toFloat(), 12f, 12f, cardPaint)
         
         val textPaint = android.graphics.Paint().apply {
             color = android.graphics.Color.WHITE
@@ -3214,8 +3402,28 @@ fun createAnalysisScreenshot(
             isAntiAlias = true
             typeface = android.graphics.Typeface.DEFAULT_BOLD
         }
-        canvas.drawText(statusText, (padding + 20).toFloat(), currentY + 40f, textPaint)
-        currentY += 80 + cardSpacing
+        
+        // Usar statusText y statusHeight ya calculados arriba
+        val statusMaxWidth = width - (padding * 2) - 40
+        val statusLines = breakTextIntoLines(textPaint, statusText, statusMaxWidth)
+        
+        val cardPaint = android.graphics.Paint().apply {
+            color = statusColor
+            isAntiAlias = true
+        }
+        canvas.drawRoundRect(padding.toFloat(), currentY.toFloat(), (width - padding).toFloat(), (currentY + statusHeight).toFloat(), 12f, 12f, cardPaint)
+        
+        // Dibujar líneas del estado (centrado verticalmente)
+        val lineHeight = 40f // Espaciado entre líneas
+        val totalTextHeight = statusLines.size * lineHeight // Altura total del texto
+        val centerY = currentY + statusHeight / 2f // Centro vertical del rectángulo
+        // Ajustar posición Y: centro del rectángulo - mitad de altura del texto + ajuste de línea base
+        var statusY = centerY - (totalTextHeight / 2f) + (lineHeight / 2f)
+        statusLines.forEach { line ->
+            canvas.drawText(line, (padding + 20).toFloat(), statusY.toFloat(), textPaint)
+            statusY += lineHeight
+        }
+        currentY += statusHeight + cardSpacing
         
         // Confianza
         val confidenceText = "Confianza: ${(resultado.confidence * 100).toInt()}%"
@@ -3232,7 +3440,8 @@ fun createAnalysisScreenshot(
             color = android.graphics.Color.parseColor("#E3F2FD")
             isAntiAlias = true
         }
-        canvas.drawRoundRect(padding.toFloat(), currentY.toFloat(), (width - padding).toFloat(), (currentY + 180).toFloat(), 12f, 12f, recPaint)
+        val recRectHeight = recommendationsHeight.toInt()
+        canvas.drawRoundRect(padding.toFloat(), currentY.toFloat(), (width - padding).toFloat(), (currentY + recRectHeight).toFloat(), 12f, 12f, recPaint)
         
         val recTitlePaint = android.graphics.Paint().apply {
             color = android.graphics.Color.parseColor("#1976D2")
@@ -3242,18 +3451,18 @@ fun createAnalysisScreenshot(
         }
         canvas.drawText("RECOMENDACIONES", (padding + 20).toFloat(), currentY + 40f, recTitlePaint)
         
-        val recTextPaint = android.graphics.Paint().apply {
-            color = android.graphics.Color.parseColor("#424242")
-            textSize = 24f
-            isAntiAlias = true
-        }
-        
+        // Usar recTextPaint y maxTextWidth ya calculados arriba
         var recY = currentY + 70
-        resultado.preventionMeasures.take(3).forEach { measure ->
-            canvas.drawText("• $measure", (padding + 20).toFloat(), recY.toFloat(), recTextPaint)
-            recY += 30
+        resultado.preventionMeasures.take(5).forEach { measure ->
+            val fullText = "• $measure"
+            val lines = breakTextIntoLines(recTextPaint, fullText, maxTextWidth)
+            lines.forEach { line ->
+                canvas.drawText(line, (padding + 20).toFloat(), recY.toFloat(), recTextPaint)
+                recY += 32 // Espaciado entre líneas
+            }
+            recY += 8 // Espacio adicional entre recomendaciones
         }
-        currentY += 200 + cardSpacing
+        currentY += recRectHeight + cardSpacing
         
         // Información adicional
         val infoPaint = android.graphics.Paint().apply {

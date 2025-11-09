@@ -24,6 +24,7 @@ import android.util.Log
 import android.content.Context
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
@@ -59,6 +60,28 @@ data class ServerPlantData(
     val moisture_value: String,
     val sensor_num: String
 )
+
+// Data class para almacenar último registro con timestamp de caché
+data class PlantLastRecord(
+    val plantId: String,
+    val lastData: ServerPlantData?,
+    val cacheTimestamp: Long = System.currentTimeMillis()
+)
+
+// Data class para avisos de plantas
+data class PlantAlert(
+    val type: AlertType,
+    val message: String,
+    val severity: AlertSeverity
+)
+
+enum class AlertType {
+    MOISTURE, TEMPERATURE, LIGHT
+}
+
+enum class AlertSeverity {
+    LOW, HIGH, OK
+}
 
 data class ConnectionResult(
     val success: Boolean,
@@ -612,42 +635,344 @@ fun ListaPlantasServidorScreen(
     serverInput: String,
     serverPlants: List<ServerPlant>,
     isConnecting: Boolean,
-    onPlantClick: (String) -> Unit
+    onPlantClick: (String) -> Unit,
+    getPlantDisplayName: (String) -> String = { it },
+    onEditPlantName: (String, String) -> Unit = { _, _ -> },
+    plantLastRecords: Map<String, PlantLastRecord> = emptyMap()
 ) {
+    val context = LocalContext.current
+    
+    // Estado para el diálogo de edición
+    var showEditDialog by remember { mutableStateOf(false) }
+    var plantIdEditando by remember { mutableStateOf<String?>(null) }
+    var nuevoNombrePlanta by remember { mutableStateOf("") }
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp)
     ) {
+        // Header con título y badge de contador
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "🌱 Plantas",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            if (!isConnecting && serverPlants.isNotEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        "${serverPlants.size}",
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // Contenido según estado
         if (isConnecting) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    CircularProgressIndicator()
+                    Text(
+                        "Cargando plantas...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
             }
         } else if (serverPlants.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Sin plantas o error de conexión")
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.8f),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    elevation = CardDefaults.cardElevation(2.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            "🌱",
+                            fontSize = 48.sp
+                        )
+                        Text(
+                            "Sin plantas",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "No se encontraron plantas en el servidor o hubo un error de conexión",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
             }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(serverPlants.size) { idx ->
                     val p = serverPlants[idx]
+                    
+                    // Obtener último registro y avisos para esta planta
+                    val lastRecord = plantLastRecords[p.plant_id]
+                    val alerts = lastRecord?.let { getPlantAlerts(it) } ?: emptyList()
+                    
+                    // Formatear fecha de registro
+                    val fechaRegistro = try {
+                        val millis = if (p.plant_registered > 1000000000000L) 
+                            p.plant_registered 
+                        else 
+                            p.plant_registered * 1000
+                        val dateFormat = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale("es","MX")).apply {
+                            timeZone = java.util.TimeZone.getTimeZone("GMT-06:00")
+                        }
+                        dateFormat.format(java.util.Date(millis))
+                    } catch (e: Exception) {
+                        "Fecha no disponible"
+                    }
+                    
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onPlantClick(p.plant_id) },
-                        elevation = CardDefaults.cardElevation(4.dp),
-                        shape = RoundedCornerShape(12.dp)
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        elevation = CardDefaults.cardElevation(2.dp),
+                        shape = RoundedCornerShape(16.dp)
                     ) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(p.plant_name, fontWeight = FontWeight.Bold)
-                            Text("${p.plant_type} • ID: ${p.plant_id}", fontSize = 12.sp)
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            // Nombre/ID destacado como título principal con botón de editar
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    getPlantDisplayName(p.plant_id),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = {
+                                        plantIdEditando = p.plant_id
+                                        nuevoNombrePlanta = getPlantDisplayName(p.plant_id)
+                                        showEditDialog = true
+                                    },
+                                    modifier = Modifier.size(40.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Edit,
+                                        contentDescription = "Editar nombre",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+                                thickness = 1.dp
+                            )
+                            
+                            // Tipo de planta como chip
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text(
+                                        "🍅 ${p.plant_type}",
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
+                            
+                            // Avisos de la planta (chips pequeños que se ajustan)
+                            if (alerts.isNotEmpty()) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    // Dividir avisos en filas para mejor organización
+                                    alerts.chunked(2).forEach { alertRow ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            alertRow.forEach { alert ->
+                                                val alertColor = when (alert.severity) {
+                                                    AlertSeverity.LOW -> MaterialTheme.colorScheme.errorContainer
+                                                    AlertSeverity.HIGH -> MaterialTheme.colorScheme.errorContainer
+                                                    AlertSeverity.OK -> MaterialTheme.colorScheme.primaryContainer
+                                                }
+                                                val alertTextColor = when (alert.severity) {
+                                                    AlertSeverity.LOW -> MaterialTheme.colorScheme.onErrorContainer
+                                                    AlertSeverity.HIGH -> MaterialTheme.colorScheme.onErrorContainer
+                                                    AlertSeverity.OK -> MaterialTheme.colorScheme.onPrimaryContainer
+                                                }
+                                                
+                                                Surface(
+                                                    color = alertColor,
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    modifier = Modifier.weight(1f, fill = false)
+                                                ) {
+                                                    Text(
+                                                        alert.message,
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = alertTextColor,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
+                                            // Rellenar espacio si hay un número impar de avisos
+                                            if (alertRow.size == 1) {
+                                                Spacer(modifier = Modifier.weight(1f))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Info secundaria (sensor y fecha)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "🔌 Sensor: ${p.soil_sens_num}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                                Text(
+                                    "•",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                                Text(
+                                    "📅 $fechaRegistro",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
                         }
                     }
                 }
             }
+        }
+        
+        // Diálogo para editar nombre de planta
+        if (showEditDialog && plantIdEditando != null) {
+            AlertDialog(
+                onDismissRequest = { 
+                    showEditDialog = false
+                    plantIdEditando = null
+                    nuevoNombrePlanta = ""
+                },
+                title = { 
+                    Text("✏️ Editar Nombre de Planta") 
+                },
+                text = {
+                    Column {
+                        Text("Escribe un nuevo nombre para la planta (máximo 30 caracteres):")
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Deja vacío para restaurar el ID original",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = nuevoNombrePlanta,
+                            onValueChange = { 
+                                if (it.length <= 30) nuevoNombrePlanta = it
+                            },
+                            label = { Text("Nombre de la planta") },
+                            placeholder = { Text(plantIdEditando ?: "ID de la planta") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "${nuevoNombrePlanta.length}/30",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (nuevoNombrePlanta.length > 30) Color.Red else Color.Gray
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = { 
+                            if (plantIdEditando != null) {
+                                // Permitir guardar nombre vacío para restaurar el ID original
+                                onEditPlantName(plantIdEditando!!, nuevoNombrePlanta.trim())
+                            }
+                            showEditDialog = false
+                            plantIdEditando = null
+                            nuevoNombrePlanta = ""
+                        }
+                    ) {
+                        Text("Guardar")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { 
+                            showEditDialog = false
+                            plantIdEditando = null
+                            nuevoNombrePlanta = ""
+                        }
+                    ) {
+                        Text("Cancelar")
+                    }
+                }
+            )
         }
     }
 }
@@ -1143,166 +1468,214 @@ fun PlantDataFilterScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Registros de plantas", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Button(onClick = { onViewRecords(filterData()) }) {
+            Text(
+                "📊 Registros de plantas",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            OutlinedButton(onClick = { onViewRecords(filterData()) }) {
                 Text("Ver registros")
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(24.dp))
 
-        // Selector de rango
-        Text("Filtro de rango", fontWeight = FontWeight.Medium)
-        Box {
-            OutlinedButton(onClick = { rangeExpanded = true }) { Text(selectedRange) }
-            DropdownMenu(expanded = rangeExpanded, onDismissRequest = { rangeExpanded = false }) {
-                rangeOptions.forEach { opt ->
-                    DropdownMenuItem(
-                        text = { Text(opt) },
-                        onClick = {
-                            selectedRange = opt
-                            isCustom = opt == "Personalizado"
-                            rangeExpanded = false
-                            persistSelection()
-                        }
-                    )
-                }
-            }
-        }
-
-        if (isCustom) {
-            Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Modo:")
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = { customSingle = true }) { Text("Fecha única") }
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = { customSingle = false }) { Text("Rango") }
-            }
-            Spacer(Modifier.height(8.dp))
-            if (customSingle) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = customDateStart,
-                        onValueChange = { customDateStart = it },
-                        label = { Text("Fecha (yyyy-MM-dd)") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                        enabled = false
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Button(onClick = {
-                        // Sin restricciones adicionales en modo único
-                        startPicker.datePicker.minDate = 0L
-                        // Establecer un maxDate amplio (hoy + 10 años) para evitar problemas
-                        val cap = java.util.Calendar.getInstance().apply { add(java.util.Calendar.YEAR, 10) }.timeInMillis
-                        startPicker.datePicker.maxDate = cap
-                        startPicker.show()
-                    }) { Text("Elegir fecha") }
-                }
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = customDateStart,
-                            onValueChange = { customDateStart = it },
-                            label = { Text("Desde (yyyy-MM-dd)") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                            enabled = false
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Button(onClick = {
-                            // Si ya hay fin, el inicio no puede ser posterior al fin
-                            val endMillis = parseYmd(customDateEnd)
-                            if (endMillis != null) {
-                                startPicker.datePicker.maxDate = endMillis
-                            }
-                            startPicker.datePicker.minDate = 0L
-                            startPicker.show()
-                        }) { Text("Elegir inicio") }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = customDateEnd,
-                            onValueChange = { customDateEnd = it },
-                            label = { Text("Hasta (yyyy-MM-dd)") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                            enabled = false
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Button(onClick = {
-                            // Si ya hay inicio, el fin no puede ser anterior al inicio
-                            val startMillis = parseYmd(customDateStart)
-                            if (startMillis != null) {
-                                endPicker.datePicker.minDate = startMillis
-                            }
-                            // MaxDate amplio (hoy + 10 años)
-                            val cap = java.util.Calendar.getInstance().apply { add(java.util.Calendar.YEAR, 10) }.timeInMillis
-                            endPicker.datePicker.maxDate = cap
-                            endPicker.show()
-                        }) { Text("Elegir fin") }
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(20.dp))
-
-        // Selector de métrica y botón Graficar
-        Row(
+        // Card de Filtros
+        Card(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            ),
+            elevation = CardDefaults.cardElevation(2.dp),
+            shape = RoundedCornerShape(16.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Métrica: ")
-                Spacer(Modifier.width(8.dp))
-                Box {
-                    OutlinedButton(onClick = { metricExpanded = true }) { Text("${metricEmoji(selectedMetric)}  ${selectedMetric}") }
-                    DropdownMenu(expanded = metricExpanded, onDismissRequest = { metricExpanded = false }) {
-                        metricOptions.forEach { m ->
-                            DropdownMenuItem(text = { Text("${metricEmoji(m)}  ${m}") }, onClick = {
-                                selectedMetric = m
-                                metricExpanded = false
-                                persistSelection()
-                            })
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Título de la sección
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "📅 Filtros",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                
+                // Selector de rango
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Filtro de rango",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                    Box {
+                        OutlinedButton(
+                            onClick = { rangeExpanded = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(selectedRange)
+                        }
+                        DropdownMenu(expanded = rangeExpanded, onDismissRequest = { rangeExpanded = false }) {
+                            rangeOptions.forEach { opt ->
+                                DropdownMenuItem(
+                                    text = { Text(opt) },
+                                    onClick = {
+                                        selectedRange = opt
+                                        isCustom = opt == "Personalizado"
+                                        rangeExpanded = false
+                                        persistSelection()
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Calendario personalizado
+                if (isCustom) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "Modo:",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            OutlinedButton(
+                                onClick = { customSingle = true },
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = if (customSingle) 
+                                        MaterialTheme.colorScheme.primaryContainer 
+                                    else 
+                                        Color.Transparent
+                                )
+                            ) {
+                                Text("Fecha única")
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            OutlinedButton(
+                                onClick = { customSingle = false },
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = if (!customSingle) 
+                                        MaterialTheme.colorScheme.primaryContainer 
+                                    else 
+                                        Color.Transparent
+                                )
+                            ) {
+                                Text("Rango")
+                            }
+                        }
+                        
+                        if (customSingle) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedTextField(
+                                    value = customDateStart,
+                                    onValueChange = { customDateStart = it },
+                                    label = { Text("Fecha (yyyy-MM-dd)") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f),
+                                    enabled = false
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Button(onClick = {
+                                    startPicker.datePicker.minDate = 0L
+                                    val cap = java.util.Calendar.getInstance().apply { add(java.util.Calendar.YEAR, 10) }.timeInMillis
+                                    startPicker.datePicker.maxDate = cap
+                                    startPicker.show()
+                                }) {
+                                    Text("Elegir")
+                                }
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    OutlinedTextField(
+                                        value = customDateStart,
+                                        onValueChange = { customDateStart = it },
+                                        label = { Text("Desde (yyyy-MM-dd)") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                        enabled = false
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Button(onClick = {
+                                        val endMillis = parseYmd(customDateEnd)
+                                        if (endMillis != null) {
+                                            startPicker.datePicker.maxDate = endMillis
+                                        }
+                                        startPicker.datePicker.minDate = 0L
+                                        startPicker.show()
+                                    }) {
+                                        Text("Elegir")
+                                    }
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    OutlinedTextField(
+                                        value = customDateEnd,
+                                        onValueChange = { customDateEnd = it },
+                                        label = { Text("Hasta (yyyy-MM-dd)") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                        enabled = false
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Button(onClick = {
+                                        val startMillis = parseYmd(customDateStart)
+                                        if (startMillis != null) {
+                                            endPicker.datePicker.minDate = startMillis
+                                        }
+                                        val cap = java.util.Calendar.getInstance().apply { add(java.util.Calendar.YEAR, 10) }.timeInMillis
+                                        endPicker.datePicker.maxDate = cap
+                                        endPicker.show()
+                                    }) {
+                                        Text("Elegir")
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
-            Button(onClick = { /* La gráfica se actualiza reactivo con selectedMetric y filtro */ }) { Text("Graficar") }
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(24.dp))
 
-        // Área de gráfica con downsampling
+        // Calcular datos filtrados y muestreados primero
         val filtered = filterData()
-
-        fun stepForSize(n: Int): Int {
-            return when {
-                n < 10 -> 1
-                n in 10..100 -> 10
-                n in 101..1000 -> 100
-                n in 1001..10000 -> 1000
-                else -> 10000
-            }
-        }
+        
+        // CONSTANTE: Número máximo de puntos a mostrar en la gráfica
+        // Puedes modificar este valor si quieres cambiar la cantidad de puntos
+        val MAX_POINTS = 20
 
         fun downsample(items: List<ServerPlantData>): List<ServerPlantData> {
             if (items.isEmpty()) return items
-            val step = stepForSize(items.size)
+            
+            // Si hay menos puntos que el máximo, devolver todos
+            if (items.size <= MAX_POINTS) {
+                return items
+            }
+            
+            // Calcular índices distribuidos uniformemente para obtener exactamente MAX_POINTS
             val result = mutableListOf<ServerPlantData>()
-            var i = step
-            while (i < items.size) {
-                result.add(items[i - 1])
-                i += step
+            val step = (items.size - 1).toFloat() / (MAX_POINTS - 1) // Paso entre índices
+            
+            // Siempre incluir el primer elemento
+            result.add(items[0])
+            
+            // Calcular los índices intermedios distribuidos uniformemente
+            for (i in 1 until MAX_POINTS - 1) {
+                val index = (i * step).toInt() // Redondear hacia abajo (truncar)
+                result.add(items[index])
             }
-            // Asegurar incluir el último
-            if (result.isEmpty() || result.last() != items.last()) {
-                result.add(items.last())
-            }
+            
+            // Siempre incluir el último elemento
+            result.add(items[items.size - 1])
+            
             return result
         }
 
@@ -1314,16 +1687,128 @@ fun PlantDataFilterScreen(
             "Suelo" -> sampled.map { it.moisture_value }
             else -> sampled.map { it.relative_humidity }
         }
+
+        // Card de Visualización
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            ),
+            elevation = CardDefaults.cardElevation(2.dp),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Título de la sección
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "📈 Visualización",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                
+                // Selector de métrica
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Métrica",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                    Box {
+                        OutlinedButton(
+                            onClick = { metricExpanded = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("${metricEmoji(selectedMetric)}  ${selectedMetric}")
+                        }
+                        DropdownMenu(expanded = metricExpanded, onDismissRequest = { metricExpanded = false }) {
+                            metricOptions.forEach { m ->
+                                DropdownMenuItem(text = { Text("${metricEmoji(m)}  ${m}") }, onClick = {
+                                    selectedMetric = m
+                                    metricExpanded = false
+                                    persistSelection()
+                                })
+                            }
+                        }
+                    }
+                }
+                
+                // Información de registros (badges)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            "📊 ${filtered.size} registros",
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            "• ${muestra.size} puntos",
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+        
+        // Estado para mostrar/ocultar lista de detalles
+        var showPointsList by remember { mutableStateOf(false) }
+        
+        // Estado para el índice del punto seleccionado (para resaltar en gráfica)
+        var selectedPointIndex by remember { mutableStateOf<Int?>(null) }
+        
+        // Estado para items expandidos en la lista
+        var expandedIndices by remember { mutableStateOf<Set<Int>>(emptySet()) }
+        
+        // Card de Gráfica
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(380.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                .height(420.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            ),
+            elevation = CardDefaults.cardElevation(4.dp),
+            shape = RoundedCornerShape(16.dp)
         ) {
-            Column(Modifier.fillMaxSize().padding(12.dp)) {
-                val stepInfo = stepForSize(filtered.size)
-                Text("${metricEmoji(selectedMetric)}  $selectedMetric • Registros: ${filtered.size} • Muestra: cada $stepInfo (puntos: ${muestra.size})", fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(8.dp))
+            Column(Modifier.fillMaxSize().padding(20.dp)) {
+                // Header de la gráfica
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "${metricEmoji(selectedMetric)} $selectedMetric",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
                 // Gráfica simple en Canvas
                 val values = muestra.mapNotNull { it.replace(",", ".").toFloatOrNull() }
                 val vMin = values.minOrNull() ?: 0f
@@ -1334,12 +1819,17 @@ fun PlantDataFilterScreen(
                 val lineColor = MaterialTheme.colorScheme.primary
                 val pointColor = MaterialTheme.colorScheme.secondary
                 val textColorOutside = MaterialTheme.colorScheme.onSurface
+                val highlightColor = MaterialTheme.colorScheme.error
+                val highlightRadius = 8f
 
                 Canvas(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .background(MaterialTheme.colorScheme.surface)
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                            shape = RoundedCornerShape(12.dp)
+                        )
                 ) {
                     if (values.size < 2) return@Canvas
 
@@ -1395,10 +1885,31 @@ fun PlantDataFilterScreen(
                         textSize = 36f
                         isAntiAlias = true
                     }
+                    
                     values.forEachIndexed { i, v ->
                         val x = leftPad + i * stepX
                         val y = topPad + (h * (1f - (v - vMin) / safeRange))
-                        drawCircle(color = pointColor, radius = 4f, center = Offset(x, y))
+                        val point = Offset(x, y)
+                        
+                        // Si este punto está seleccionado, dibujar círculo de resaltado
+                        if (selectedPointIndex == i) {
+                            drawCircle(
+                                color = highlightColor.copy(alpha = 0.3f),
+                                radius = highlightRadius + 4f,
+                                center = point
+                            )
+                            drawCircle(
+                                color = highlightColor,
+                                radius = highlightRadius,
+                                center = point,
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f)
+                            )
+                        }
+                        
+                        // Dibujar el punto normal
+                        drawCircle(color = pointColor, radius = 4f, center = point)
+                        
+                        // Dibujar etiqueta
                         val label = String.format(java.util.Locale.US, "%.1f", v)
                         val tx = (x + 6f).coerceAtMost(size.width - 24f)
                         val ty = (y - 8f).coerceAtLeast(24f)
@@ -1407,25 +1918,147 @@ fun PlantDataFilterScreen(
                         }
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                // Lista de puntos muestreados
-                fun unitFor(metric: String): String = when (metric) {
-                    "Temperatura" -> "°C"
-                    "Humedad" -> "%"
-                    "Suelo" -> "%"
-                    "Luz" -> " lux"
-                    else -> ""
-                }
-                val unit = unitFor(selectedMetric)
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    sampled.forEachIndexed { idx, item ->
-                        val vStr = muestra.getOrNull(idx)?.replace(",", ".")?.toFloatOrNull()
-                        val millis = if (item.timestamp > 1000000000000L) item.timestamp else item.timestamp * 1000
-                        val dateStr = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale("es","MX")).apply {
-                            timeZone = java.util.TimeZone.getTimeZone("GMT-06:00")
-                        }.format(java.util.Date(millis))
-                        if (vStr != null) {
-                            Text("• ${dateStr} — ${String.format(java.util.Locale.US, "%.1f", vStr)}${unit}")
+            }
+        }
+        
+        Spacer(Modifier.height(16.dp))
+        
+        // Botón para mostrar/ocultar lista de detalles
+        Button(
+            onClick = { showPointsList = !showPointsList },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (showPointsList) 
+                    MaterialTheme.colorScheme.secondary 
+                else 
+                    MaterialTheme.colorScheme.primary
+            )
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    if (showPointsList) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(if (showPointsList) "Ocultar detalles de puntos" else "Ver detalles de puntos")
+            }
+        }
+        
+        // Lista de puntos con detalles expandibles
+        if (showPointsList) {
+            Spacer(Modifier.height(16.dp))
+            
+            fun unitFor(metric: String): String = when (metric) {
+                "Temperatura" -> "°C"
+                "Humedad" -> "%"
+                "Suelo" -> "%"
+                "Luz" -> " lux"
+                else -> ""
+            }
+            
+            val unit = unitFor(selectedMetric)
+            
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.height(400.dp)
+            ) {
+                items(sampled.size) { idx ->
+                    val item = sampled[idx]
+                    val vStr = muestra.getOrNull(idx)?.replace(",", ".")?.toFloatOrNull()
+                    val millis = if (item.timestamp > 1000000000000L) item.timestamp else item.timestamp * 1000
+                    val dateStr = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale("es","MX")).apply {
+                        timeZone = java.util.TimeZone.getTimeZone("GMT-06:00")
+                    }.format(java.util.Date(millis))
+                    val isExpanded = expandedIndices.contains(idx)
+                    val isSelected = selectedPointIndex == idx
+                    
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selectedPointIndex = idx
+                                expandedIndices = if (isExpanded) {
+                                    expandedIndices - idx
+                                } else {
+                                    expandedIndices + idx
+                                }
+                            },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isSelected) 
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                            else 
+                                MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        elevation = CardDefaults.cardElevation(if (isSelected) 8.dp else 2.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        dateStr,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    if (vStr != null) {
+                                        Text(
+                                            "${metricEmoji(selectedMetric)} ${selectedMetric}: ${String.format(java.util.Locale.US, "%.1f", vStr)}${unit}",
+                                            fontSize = 14.sp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                                Icon(
+                                    if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                    contentDescription = if (isExpanded) "Contraer" else "Expandir",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            
+                            // Contenido expandido
+                            if (isExpanded) {
+                                Spacer(Modifier.height(12.dp))
+                                HorizontalDivider()
+                                Spacer(Modifier.height(12.dp))
+                                
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        "🌡️ Temperatura: ${item.temperature.replace(",", ".")}°C",
+                                        fontSize = 14.sp
+                                    )
+                                    Text(
+                                        "💧 Humedad: ${item.relative_humidity.replace(",", ".")}%",
+                                        fontSize = 14.sp
+                                    )
+                                    Text(
+                                        "☀️ Luz: ${item.lux.replace(",", ".")} lux",
+                                        fontSize = 14.sp
+                                    )
+                                    Text(
+                                        "🌱 Suelo: ${item.moisture_value.replace(",", ".")}%",
+                                        fontSize = 14.sp
+                                    )
+                                    if (item.sensor_num.isNotEmpty()) {
+                                        Text(
+                                            "🔌 Sensor: ${item.sensor_num}",
+                                            fontSize = 14.sp,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1552,20 +2185,22 @@ suspend fun getServerPlants(serverInput: String): List<ServerPlant> {
 }
 
 // Función para obtener datos de una planta específica
-suspend fun getServerPlantData(serverInput: String, plantId: String): List<ServerPlantData> {
+// maxRecords: Límite máximo de registros a cargar (por defecto 10,000 para evitar problemas de memoria)
+suspend fun getServerPlantData(serverInput: String, plantId: String, maxRecords: Int = 10000): List<ServerPlantData> {
     return withContext(Dispatchers.IO) {
         try {
             Log.d("ServerConnection", "=== OBTENIENDO DATOS DE PLANTA ===")
             Log.d("ServerConnection", "IP y Puerto: $serverInput, Plant ID: $plantId")
             Log.d("ServerConnection", "URL: http://${serverInput}/plant_data")
+            Log.d("ServerConnection", "Límite máximo de registros: $maxRecords")
 
             val url = java.net.URL("http://${serverInput}/plant_data")
             val conn = (url.openConnection() as java.net.HttpURLConnection)
 
-            // Configuración estándar de red
+            // Configuración estándar de red (timeouts aumentados para grandes volúmenes)
             conn.requestMethod = "GET"
-            conn.connectTimeout = 7000   // 7 segundos
-            conn.readTimeout = 7000      // 7 segundos
+            conn.connectTimeout = 15000   // 15 segundos (aumentado para grandes descargas)
+            conn.readTimeout = 30000      // 30 segundos (aumentado para parsear JSON grandes)
             conn.doInput = true
             conn.setRequestProperty("User-Agent", "CultivApp/1.0")
             conn.setRequestProperty("Accept", "application/json")
@@ -1578,6 +2213,8 @@ suspend fun getServerPlantData(serverInput: String, plantId: String): List<Serve
                 val body = conn.inputStream.bufferedReader().readText()
                 val json = org.json.JSONArray(body)
                 val items = mutableListOf<ServerPlantData>()
+
+                Log.d("ServerConnection", "JSON recibido con ${json.length()} elementos totales")
 
                 for (i in 0 until json.length()) {
                     val o = json.getJSONObject(i)
@@ -1595,18 +2232,234 @@ suspend fun getServerPlantData(serverInput: String, plantId: String): List<Serve
                         )
                     }
                 }
+                
+                // Ordenar por timestamp y tomar solo los últimos N registros
                 val sortedItems = items.sortedBy { it.timestamp }
-                Log.d("ServerConnection", "Datos de planta obtenidos exitosamente: ${sortedItems.size} registros")
-                sortedItems
+                val limitedItems = if (sortedItems.size > maxRecords) {
+                    Log.w("ServerConnection", "⚠️ Se encontraron ${sortedItems.size} registros, limitando a los últimos $maxRecords")
+                    sortedItems.takeLast(maxRecords)
+                } else {
+                    sortedItems
+                }
+                
+                Log.d("ServerConnection", "Datos de planta obtenidos exitosamente: ${limitedItems.size} registros (de ${items.size} totales encontrados)")
+                limitedItems
             } else {
                 Log.e("ServerConnection", "Error HTTP: $code al obtener datos de planta")
                 emptyList()
             }
+        } catch (e: OutOfMemoryError) {
+            Log.e("ServerConnection", "❌ Error de memoria al cargar datos: ${e.message}")
+            Log.e("ServerConnection", "Intenta reducir el límite de registros o usar filtros de fecha")
+            emptyList()
+        } catch (e: java.net.SocketTimeoutException) {
+            Log.e("ServerConnection", "⏱️ Timeout al cargar datos: ${e.message}")
+            Log.e("ServerConnection", "El servidor tardó demasiado en responder. Considera usar filtros de fecha.")
+            emptyList()
         } catch (e: Exception) {
             Log.e("ServerConnection", "Error obteniendo datos de planta: ${e.message}")
             emptyList()
         }
     }
+}
+
+// Función para obtener el último registro de una planta (con caché)
+// maxRecords: Límite de registros a cargar (optimizado para lista de plantas - solo necesita el último)
+suspend fun getLastPlantRecord(
+    serverInput: String,
+    plantId: String,
+    cachedRecord: PlantLastRecord?,
+    cacheTimeoutMs: Long = 60000, // 1 minuto por defecto
+    maxRecords: Int = 100 // Solo cargar 100 registros (suficiente para obtener el último)
+): PlantLastRecord {
+    val now = System.currentTimeMillis()
+    
+    // Si hay caché válido (menos de 1 minuto), retornarlo
+    if (cachedRecord != null && 
+        cachedRecord.plantId == plantId &&
+        (now - cachedRecord.cacheTimestamp) < cacheTimeoutMs) {
+        Log.d("PlantAlerts", "Usando datos en caché para planta $plantId")
+        return cachedRecord
+    }
+    
+    // Obtener datos frescos (solo los últimos 100 registros - suficiente para encontrar el más reciente)
+    val allData = getServerPlantData(serverInput, plantId, maxRecords = maxRecords)
+    val lastData = allData.maxByOrNull { it.timestamp }
+    
+    Log.d("PlantAlerts", "Datos frescos obtenidos para planta $plantId: ${lastData != null} (de ${allData.size} registros cargados)")
+    
+    return PlantLastRecord(
+        plantId = plantId,
+        lastData = lastData,
+        cacheTimestamp = now
+    )
+}
+
+// Función para evaluar avisos de humedad de tierra
+// Nota: Valores altos (>590%) = muy seco (necesita agua)
+//       Valores bajos (<349%) = muy mojado (tiene mucha agua)
+fun evaluateMoistureAlert(moistureValue: String?): PlantAlert? {
+    if (moistureValue == null) return null
+    
+    val moisture = moistureValue.toDoubleOrNull() ?: return null
+    
+    return when {
+        moisture > 590 -> PlantAlert(
+            type = AlertType.MOISTURE,
+            message = "Le hace falta agua",
+            severity = AlertSeverity.LOW
+        )
+        moisture < 349 -> PlantAlert(
+            type = AlertType.MOISTURE,
+            message = "Tiene mucha agua",
+            severity = AlertSeverity.HIGH
+        )
+        else -> PlantAlert(
+            type = AlertType.MOISTURE,
+            message = "Nivel de agua: OK",
+            severity = AlertSeverity.OK
+        ) // Entre 350-590, está OK
+    }
+}
+
+// Función para evaluar avisos de temperatura
+fun evaluateTemperatureAlert(temperature: String?): PlantAlert? {
+    if (temperature == null) return null
+    
+    val temp = temperature.toDoubleOrNull() ?: return null
+    
+    return if (temp >= 36) {
+        PlantAlert(
+            type = AlertType.TEMPERATURE,
+            message = "Temperatura alta: ${temp.toInt()}°C",
+            severity = AlertSeverity.HIGH
+        )
+    } else {
+        PlantAlert(
+            type = AlertType.TEMPERATURE,
+            message = "Temperatura: ${temp.toInt()}°C",
+            severity = AlertSeverity.OK
+        )
+    }
+}
+
+// Función para evaluar avisos de luminosidad según la hora
+fun evaluateLightAlert(lux: String?, timestamp: Long): PlantAlert? {
+    if (lux == null) return null
+    
+    val luxValue = lux.toDoubleOrNull() ?: return null
+    
+    // Obtener hora del día (0-23) desde el timestamp
+    val calendar = java.util.Calendar.getInstance()
+    calendar.timeInMillis = if (timestamp > 1000000000000L) timestamp else timestamp * 1000
+    val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+    
+    // Solo evaluar entre 6am-6pm (6-18 horas)
+    if (hour < 6 || hour >= 18) {
+        return null // No mostrar aviso de luz fuera de horas de día
+    }
+    
+    return when {
+        hour >= 6 && hour < 9 -> {
+            // 6:00 - 9:00: Muy Bajo < 5,000 lx, Máximo: 10,000 - 15,000 lx
+            when {
+                luxValue < 5000 -> PlantAlert(
+                    type = AlertType.LIGHT,
+                    message = "Luz muy baja",
+                    severity = AlertSeverity.LOW
+                )
+                luxValue > 15000 -> PlantAlert(
+                    type = AlertType.LIGHT,
+                    message = "Luz muy alta",
+                    severity = AlertSeverity.HIGH
+                )
+                else -> PlantAlert(
+                    type = AlertType.LIGHT,
+                    message = "Luz: OK",
+                    severity = AlertSeverity.OK
+                )
+            }
+        }
+        hour >= 9 && hour < 12 -> {
+            // 9:00 - 12:00: Muy Bajo < 8,000 lx, Máximo: 20,000 - 25,000 lx
+            when {
+                luxValue < 8000 -> PlantAlert(
+                    type = AlertType.LIGHT,
+                    message = "Luz muy baja",
+                    severity = AlertSeverity.LOW
+                )
+                luxValue > 25000 -> PlantAlert(
+                    type = AlertType.LIGHT,
+                    message = "Luz muy alta",
+                    severity = AlertSeverity.HIGH
+                )
+                else -> PlantAlert(
+                    type = AlertType.LIGHT,
+                    message = "Luz: OK",
+                    severity = AlertSeverity.OK
+                )
+            }
+        }
+        hour >= 12 && hour < 15 -> {
+            // 12:00 - 15:00: Muy Bajo < 10,000 lx, Máximo: 25,000 - 30,000 lx
+            when {
+                luxValue < 10000 -> PlantAlert(
+                    type = AlertType.LIGHT,
+                    message = "Luz muy baja",
+                    severity = AlertSeverity.LOW
+                )
+                luxValue > 30000 -> PlantAlert(
+                    type = AlertType.LIGHT,
+                    message = "Luz muy alta",
+                    severity = AlertSeverity.HIGH
+                )
+                else -> PlantAlert(
+                    type = AlertType.LIGHT,
+                    message = "Luz: OK",
+                    severity = AlertSeverity.OK
+                )
+            }
+        }
+        hour >= 15 && hour < 18 -> {
+            // 15:00 - 18:00: Muy Bajo < 8,000 lx, Máximo: 15,000 - 25,000 lx
+            when {
+                luxValue < 8000 -> PlantAlert(
+                    type = AlertType.LIGHT,
+                    message = "Luz muy baja",
+                    severity = AlertSeverity.LOW
+                )
+                luxValue > 25000 -> PlantAlert(
+                    type = AlertType.LIGHT,
+                    message = "Luz muy alta",
+                    severity = AlertSeverity.HIGH
+                )
+                else -> PlantAlert(
+                    type = AlertType.LIGHT,
+                    message = "Luz: OK",
+                    severity = AlertSeverity.OK
+                )
+            }
+        }
+        else -> null
+    }
+}
+
+// Función para obtener todos los avisos de una planta
+fun getPlantAlerts(lastRecord: PlantLastRecord): List<PlantAlert> {
+    val alerts = mutableListOf<PlantAlert>()
+    
+    val data = lastRecord.lastData ?: return emptyList()
+    
+    // Evaluar humedad
+    evaluateMoistureAlert(data.moisture_value)?.let { alerts.add(it) }
+    
+    // Evaluar temperatura
+    evaluateTemperatureAlert(data.temperature)?.let { alerts.add(it) }
+    
+    // Evaluar luminosidad
+    evaluateLightAlert(data.lux, data.timestamp)?.let { alerts.add(it) }
+    
+    return alerts
 }
 
 // Función para probar conexión con configuración inteligente
