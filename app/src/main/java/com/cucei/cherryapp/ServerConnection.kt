@@ -646,6 +646,17 @@ fun ListaPlantasServidorScreen(
     var showEditDialog by remember { mutableStateOf(false) }
     var plantIdEditando by remember { mutableStateOf<String?>(null) }
     var nuevoNombrePlanta by remember { mutableStateOf("") }
+    var intervaloSeleccionado by remember { mutableStateOf<Int?>(null) } // En segundos
+    var actualizandoIntervalo by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+    
+    // Opciones de intervalo en segundos
+    val intervalos = listOf(
+        60 to "1 minuto",
+        300 to "5 minutos",
+        600 to "10 minutos",
+        1800 to "30 minutos"
+    )
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -914,36 +925,123 @@ fun ListaPlantasServidorScreen(
                     showEditDialog = false
                     plantIdEditando = null
                     nuevoNombrePlanta = ""
+                    intervaloSeleccionado = null
+                    actualizandoIntervalo = false
                 },
                 title = { 
-                    Text("✏️ Editar Nombre de Planta") 
+                    Text("✏️ Editar Planta") 
                 },
                 text = {
-                    Column {
-                        Text("Escribe un nuevo nombre para la planta (máximo 30 caracteres):")
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            "Deja vacío para restaurar el ID original",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = nuevoNombrePlanta,
-                            onValueChange = { 
-                                if (it.length <= 30) nuevoNombrePlanta = it
-                            },
-                            label = { Text("Nombre de la planta") },
-                            placeholder = { Text(plantIdEditando ?: "ID de la planta") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "${nuevoNombrePlanta.length}/30",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (nuevoNombrePlanta.length > 30) Color.Red else Color.Gray
-                        )
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        // Sección de nombre
+                        Column {
+                            Text(
+                                "Nombre de la planta (máximo 30 caracteres):",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "Deja vacío para restaurar el ID original",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = nuevoNombrePlanta,
+                                onValueChange = { 
+                                    if (it.length <= 30) nuevoNombrePlanta = it
+                                },
+                                label = { Text("Nombre de la planta") },
+                                placeholder = { Text(plantIdEditando ?: "ID de la planta") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "${nuevoNombrePlanta.length}/30",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (nuevoNombrePlanta.length > 30) Color.Red else Color.Gray
+                            )
+                        }
+                        
+                        HorizontalDivider()
+                        
+                        // Sección de intervalo de actualización
+                        Column {
+                            Text(
+                                "⏱️ Intervalo de actualización:",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
+                            // Botones de selección de intervalo
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                intervalos.forEach { (segundos, etiqueta) ->
+                                    FilterChip(
+                                        selected = intervaloSeleccionado == segundos,
+                                        onClick = {
+                                            intervaloSeleccionado = if (intervaloSeleccionado == segundos) null else segundos
+                                        },
+                                        label = { Text(etiqueta) },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                            
+                            if (intervaloSeleccionado != null) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        if (plantIdEditando != null && !actualizandoIntervalo) {
+                                            actualizandoIntervalo = true
+                                            coroutineScope.launch {
+                                                val exito = updateSchedulerInterval(
+                                                    serverInput = serverInput,
+                                                    jobId = plantIdEditando!!, // Usar plant_id como job_id
+                                                    seconds = intervaloSeleccionado!!
+                                                )
+                                                actualizandoIntervalo = false
+                                                if (exito) {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        "Intervalo actualizado a ${intervalos.find { it.first == intervaloSeleccionado }?.second}, ",
+                                                        android.widget.Toast.LENGTH_SHORT
+                                                    ).show()
+                                                    intervaloSeleccionado = null
+                                                } else {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        "Error al actualizar el intervalo",
+                                                        android.widget.Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }
+                                            }
+                                        }
+                                    },
+                                    enabled = !actualizandoIntervalo,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    if (actualizandoIntervalo) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Actualizando...")
+                                    } else {
+                                        Text("Actualizar intervalo")
+                                    }
+                                }
+                            }
+                        }
                     }
                 },
                 confirmButton = {
@@ -956,9 +1054,11 @@ fun ListaPlantasServidorScreen(
                             showEditDialog = false
                             plantIdEditando = null
                             nuevoNombrePlanta = ""
+                            intervaloSeleccionado = null
+                            actualizandoIntervalo = false
                         }
                     ) {
-                        Text("Guardar")
+                        Text("Guardar nombre")
                     }
                 },
                 dismissButton = {
@@ -967,6 +1067,8 @@ fun ListaPlantasServidorScreen(
                             showEditDialog = false
                             plantIdEditando = null
                             nuevoNombrePlanta = ""
+                            intervaloSeleccionado = null
+                            actualizandoIntervalo = false
                         }
                     ) {
                         Text("Cancelar")
@@ -2184,6 +2286,8 @@ suspend fun getServerPlants(serverInput: String): List<ServerPlant> {
     }
 }
 
+// En ServerConnection.kt
+
 // Función para obtener datos de una planta específica
 // maxRecords: Límite máximo de registros a cargar (por defecto 10,000 para evitar problemas de memoria)
 suspend fun getServerPlantData(serverInput: String, plantId: String, maxRecords: Int = 10000): List<ServerPlantData> {
@@ -2191,22 +2295,37 @@ suspend fun getServerPlantData(serverInput: String, plantId: String, maxRecords:
         try {
             Log.d("ServerConnection", "=== OBTENIENDO DATOS DE PLANTA ===")
             Log.d("ServerConnection", "IP y Puerto: $serverInput, Plant ID: $plantId")
-            Log.d("ServerConnection", "URL: http://${serverInput}/plant_data")
+
+            // Detectar si estamos en emulador y ajustar la IP
+            val adjustedServerInput = if (isRunningOnEmulator()) {
+                when {
+                    serverInput.startsWith("10.214.49.194") -> serverInput.replace("10.214.49.194", "10.0.2.2")
+                    serverInput.startsWith("192.168.") -> serverInput.replace("192.168.", "10.0.2.2")
+                    else -> serverInput
+                }
+            } else {
+                serverInput
+            }
+
+            // --- CAMBIO CLAVE AQUÍ ---
+            // La URL ahora apunta directamente al endpoint con el ID de la planta.
+            val urlString = "http://${adjustedServerInput}/plant_data/$plantId"
+            Log.d("ServerConnection", "URL: $urlString")
             Log.d("ServerConnection", "Límite máximo de registros: $maxRecords")
 
-            val url = java.net.URL("http://${serverInput}/plant_data")
+            val url = java.net.URL(urlString) // Usamos la nueva URL
             val conn = (url.openConnection() as java.net.HttpURLConnection)
 
-            // Configuración estándar de red (timeouts aumentados para grandes volúmenes)
+            // Configuración de red (sin cambios)
             conn.requestMethod = "GET"
-            conn.connectTimeout = 15000   // 15 segundos (aumentado para grandes descargas)
-            conn.readTimeout = 30000      // 30 segundos (aumentado para parsear JSON grandes)
+            conn.connectTimeout = 15000
+            conn.readTimeout = 30000
             conn.doInput = true
             conn.setRequestProperty("User-Agent", "CultivApp/1.0")
             conn.setRequestProperty("Accept", "application/json")
             conn.setRequestProperty("Cache-Control", "no-cache")
 
-            Log.d("ServerConnection", "Conectando con configuración estándar")
+            Log.d("ServerConnection", "Conectando...")
 
             val code = conn.responseCode
             if (code == 200) {
@@ -2216,23 +2335,24 @@ suspend fun getServerPlantData(serverInput: String, plantId: String, maxRecords:
 
                 Log.d("ServerConnection", "JSON recibido con ${json.length()} elementos totales")
 
+                // --- YA NO NECESITAMOS FILTRAR ---
+                // El servidor ya nos dio solo los datos de la planta correcta.
                 for (i in 0 until json.length()) {
                     val o = json.getJSONObject(i)
-                    if (o.optString("plant_id") == plantId) {
-                        items.add(
-                            ServerPlantData(
-                                plant_id = o.optString("plant_id"),
-                                timestamp = o.optLong("timestamp"),
-                                temperature = o.optString("temperature"),
-                                relative_humidity = o.optString("relative_humidity"),
-                                lux = o.optString("lux"),
-                                moisture_value = o.optString("moisture_value"),
-                                sensor_num = o.optString("sensor_num")
-                            )
+                    // Simplemente añadimos cada objeto del array.
+                    items.add(
+                        ServerPlantData(
+                            plant_id = o.optString("plant_id"),
+                            timestamp = o.optLong("timestamp"),
+                            temperature = o.optString("temperature"),
+                            relative_humidity = o.optString("relative_humidity"),
+                            lux = o.optString("lux"),
+                            moisture_value = o.optString("moisture_value"),
+                            sensor_num = o.optString("sensor_num")
                         )
-                    }
+                    )
                 }
-                
+
                 // Ordenar por timestamp y tomar solo los últimos N registros
                 val sortedItems = items.sortedBy { it.timestamp }
                 val limitedItems = if (sortedItems.size > maxRecords) {
@@ -2241,24 +2361,86 @@ suspend fun getServerPlantData(serverInput: String, plantId: String, maxRecords:
                 } else {
                     sortedItems
                 }
-                
-                Log.d("ServerConnection", "Datos de planta obtenidos exitosamente: ${limitedItems.size} registros (de ${items.size} totales encontrados)")
+
+                Log.d("ServerConnection", "Datos de planta procesados: ${limitedItems.size} registros")
                 limitedItems
             } else {
-                Log.e("ServerConnection", "Error HTTP: $code al obtener datos de planta")
+                Log.e("ServerConnection", "Error HTTP: $code al obtener datos de planta desde $urlString")
                 emptyList()
             }
         } catch (e: OutOfMemoryError) {
             Log.e("ServerConnection", "❌ Error de memoria al cargar datos: ${e.message}")
-            Log.e("ServerConnection", "Intenta reducir el límite de registros o usar filtros de fecha")
             emptyList()
         } catch (e: java.net.SocketTimeoutException) {
             Log.e("ServerConnection", "⏱️ Timeout al cargar datos: ${e.message}")
-            Log.e("ServerConnection", "El servidor tardó demasiado en responder. Considera usar filtros de fecha.")
             emptyList()
         } catch (e: Exception) {
             Log.e("ServerConnection", "Error obteniendo datos de planta: ${e.message}")
             emptyList()
+        }
+    }
+}
+
+
+// Función para actualizar el intervalo de actualización del scheduler
+suspend fun updateSchedulerInterval(
+    serverInput: String,
+    jobId: String,
+    seconds: Int
+): Boolean {
+    return withContext(Dispatchers.IO) {
+        try {
+            Log.d("ServerConnection", "=== ACTUALIZANDO INTERVALO DEL SCHEDULER ===")
+            Log.d("ServerConnection", "IP y Puerto: $serverInput, Job ID: $jobId, Segundos: $seconds")
+            
+            // Detectar si estamos en emulador y ajustar la IP
+            val adjustedServerInput = if (isRunningOnEmulator()) {
+                when {
+                    serverInput.startsWith("10.214.49.194") -> serverInput.replace("10.214.49.194", "10.0.2.2")
+                    serverInput.startsWith("192.168.") -> serverInput.replace("192.168.", "10.0.2.2")
+                    else -> serverInput
+                }
+            } else {
+                serverInput
+            }
+            
+            val url = java.net.URL("http://${adjustedServerInput}/scheduler/jobs/$jobId")
+            val conn = (url.openConnection() as java.net.HttpURLConnection)
+            
+            conn.requestMethod = "PATCH"
+            conn.connectTimeout = 10000
+            conn.readTimeout = 10000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("User-Agent", "CultivApp/1.0")
+            conn.setRequestProperty("Accept", "application/json")
+            
+            // Crear el JSON body
+            val jsonBody = org.json.JSONObject()
+            jsonBody.put("trigger", "interval")
+            jsonBody.put("seconds", seconds)
+            
+            // Enviar el body
+            conn.outputStream.use { output ->
+                output.write(jsonBody.toString().toByteArray(Charsets.UTF_8))
+            }
+            
+            val code = conn.responseCode
+            if (code in 200..299) {
+                Log.d("ServerConnection", "Intervalo actualizado exitosamente: $seconds segundos")
+                true
+            } else {
+                val errorBody = try {
+                    conn.errorStream?.bufferedReader()?.readText() ?: "Sin detalles"
+                } catch (e: Exception) {
+                    "Error al leer respuesta"
+                }
+                Log.e("ServerConnection", "Error HTTP $code al actualizar intervalo: $errorBody")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e("ServerConnection", "Error actualizando intervalo: ${e.message}")
+            false
         }
     }
 }
