@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -636,27 +637,11 @@ fun ListaPlantasServidorScreen(
     serverPlants: List<ServerPlant>,
     isConnecting: Boolean,
     onPlantClick: (String) -> Unit,
-    getPlantDisplayName: (String) -> String = { it },
-    onEditPlantName: (String, String) -> Unit = { _, _ -> },
+    onEditPlant: (ServerPlant) -> Unit,
     plantLastRecords: Map<String, PlantLastRecord> = emptyMap()
 ) {
     val context = LocalContext.current
     
-    // Estado para el diálogo de edición
-    var showEditDialog by remember { mutableStateOf(false) }
-    var plantIdEditando by remember { mutableStateOf<String?>(null) }
-    var nuevoNombrePlanta by remember { mutableStateOf("") }
-    var intervaloSeleccionado by remember { mutableStateOf<Int?>(null) } // En segundos
-    var actualizandoIntervalo by remember { mutableStateOf(false) }
-    val coroutineScope = rememberCoroutineScope()
-    
-    // Opciones de intervalo en segundos
-    val intervalos = listOf(
-        60 to "1 minuto",
-        300 to "5 minutos",
-        600 to "10 minutos",
-        1800 to "30 minutos"
-    )
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -701,7 +686,7 @@ fun ListaPlantasServidorScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    CircularProgressIndicator()
+                CircularProgressIndicator()
                     Text(
                         "Cargando plantas...",
                         style = MaterialTheme.typography.bodyMedium,
@@ -792,7 +777,7 @@ fun ListaPlantasServidorScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    getPlantDisplayName(p.plant_id),
+                                    p.plant_name.ifBlank { p.plant_id },
                                     style = MaterialTheme.typography.titleLarge,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.primary,
@@ -800,15 +785,13 @@ fun ListaPlantasServidorScreen(
                                 )
                                 IconButton(
                                     onClick = {
-                                        plantIdEditando = p.plant_id
-                                        nuevoNombrePlanta = getPlantDisplayName(p.plant_id)
-                                        showEditDialog = true
+                                        onEditPlant(p)
                                     },
                                     modifier = Modifier.size(40.dp)
                                 ) {
                                     Icon(
                                         Icons.Default.Edit,
-                                        contentDescription = "Editar nombre",
+                                        contentDescription = "Editar planta",
                                         tint = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -917,164 +900,324 @@ fun ListaPlantasServidorScreen(
                 }
             }
         }
+    }
+}
+
+// Pantalla de edición de planta
+@Composable
+fun EditarPlantaScreen(
+    serverInput: String,
+    plant: ServerPlant,
+    onBack: () -> Unit,
+    onSave: () -> Unit
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    
+    // Estados para los campos editables
+    var plantName by remember { mutableStateOf(plant.plant_name) }
+    var plantType by remember { mutableStateOf(plant.plant_type) }
+    var plantDate by remember { mutableStateOf(plant.plant_date) }
+    var plantUpdatePoll by remember { mutableStateOf(plant.plant_update_poll) }
+    var updatePollActivated by remember { mutableStateOf(plant.update_poll_activated) }
+    var soilSensNum by remember { mutableStateOf(plant.soil_sens_num.toString()) }
+    
+    // Estado para el guardado
+    var guardando by remember { mutableStateOf(false) }
+    
+    // Opciones de intervalo en minutos (convertir a segundos)
+    val intervalos = listOf(
+        300 to "5 minutos",
+        600 to "10 minutos",
+        900 to "15 minutos",
+        1800 to "30 minutos",
+        3600 to "60 minutos"
+    )
+    
+    // Formatear fecha
+    val fechaFormateada = try {
+        val millis = if (plantDate > 1000000000000L) plantDate else plantDate * 1000
+        val dateFormat = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale("es", "MX")).apply {
+            timeZone = java.util.TimeZone.getTimeZone("GMT-06:00")
+        }
+        dateFormat.format(java.util.Date(millis))
+    } catch (e: Exception) {
+        "Fecha no disponible"
+    }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // Header con título y botón de regreso
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.Default.ArrowBack,
+                    contentDescription = "Volver",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            Text(
+                "Editando la planta ${plant.plant_name.ifBlank { plant.plant_id }}",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.width(48.dp)) // Balancear el espacio del IconButton
+        }
         
-        // Diálogo para editar nombre de planta
-        if (showEditDialog && plantIdEditando != null) {
-            AlertDialog(
-                onDismissRequest = { 
-                    showEditDialog = false
-                    plantIdEditando = null
-                    nuevoNombrePlanta = ""
-                    intervaloSeleccionado = null
-                    actualizandoIntervalo = false
-                },
-                title = { 
-                    Text("✏️ Editar Planta") 
-                },
-                text = {
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        // Contenido scrolleable
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Campos bloqueados (solo lectura)
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    )
+                ) {
                     Column(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            "Campos de solo lectura",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                        
+                        // Plant ID (bloqueado)
+                        OutlinedTextField(
+                            value = plant.plant_id,
+                            onValueChange = { },
+                            label = { Text("ID de la planta") },
+                            enabled = false,
+                            modifier = Modifier.fillMaxWidth(),
+                            readOnly = true
+                        )
+                        
+                        // Device MAC (bloqueado)
+                        OutlinedTextField(
+                            value = plant.device_mac,
+                            onValueChange = { },
+                            label = { Text("MAC del dispositivo") },
+                            enabled = false,
+                            modifier = Modifier.fillMaxWidth(),
+                            readOnly = true
+                        )
+                    }
+                }
+            }
+            
+            // Campos editables
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        // Sección de nombre
-                        Column {
+                        Text(
+                            "Campos editables",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        
+                        // Nombre de la planta
+                        OutlinedTextField(
+                            value = plantName,
+                            onValueChange = { if (it.length <= 50) plantName = it },
+                            label = { Text("Nombre de la planta") },
+                            placeholder = { Text(plant.plant_id) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        Text(
+                            "${plantName.length}/50",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (plantName.length > 50) Color.Red else Color.Gray
+                        )
+                        
+                        // Tipo de planta
+                        OutlinedTextField(
+                            value = plantType,
+                            onValueChange = { plantType = it },
+                            label = { Text("Tipo de planta") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        
+                        // Fecha de plantación (mostrar como texto formateado)
+                        OutlinedTextField(
+                            value = fechaFormateada,
+                            onValueChange = { },
+                            label = { Text("Fecha de plantación") },
+                            enabled = false,
+                            modifier = Modifier.fillMaxWidth(),
+                            readOnly = true,
+                            trailingIcon = {
+                                Text(
+                                    "(No editable)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                            }
+                        )
+                        
+                        HorizontalDivider()
+                        
+                        // Intervalo de actualización
+                        Text(
+                            "⏱️ Intervalo de actualización de datos:",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            intervalos.forEach { (segundos, etiqueta) ->
+                                FilterChip(
+                                    selected = plantUpdatePoll == segundos,
+                                    onClick = {
+                                        plantUpdatePoll = segundos
+                                    },
+                                    label = { Text(etiqueta) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                        
+                        // Activar/desactivar polling
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Text(
-                                "Nombre de la planta (máximo 30 caracteres):",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium
+                                "Activar actualización automática:",
+                                style = MaterialTheme.typography.bodyMedium
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                "Deja vacío para restaurar el ID original",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = nuevoNombrePlanta,
-                                onValueChange = { 
-                                    if (it.length <= 30) nuevoNombrePlanta = it
-                                },
-                                label = { Text("Nombre de la planta") },
-                                placeholder = { Text(plantIdEditando ?: "ID de la planta") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "${nuevoNombrePlanta.length}/30",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (nuevoNombrePlanta.length > 30) Color.Red else Color.Gray
+                            Switch(
+                                checked = updatePollActivated,
+                                onCheckedChange = { updatePollActivated = it }
                             )
                         }
                         
                         HorizontalDivider()
                         
-                        // Sección de intervalo de actualización
-                        Column {
-                            Text(
-                                "⏱️ Intervalo de actualización:",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            
-                            // Botones de selección de intervalo
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                intervalos.forEach { (segundos, etiqueta) ->
-                                    FilterChip(
-                                        selected = intervaloSeleccionado == segundos,
-                                        onClick = {
-                                            intervaloSeleccionado = if (intervaloSeleccionado == segundos) null else segundos
-                                        },
-                                        label = { Text(etiqueta) },
-                                        modifier = Modifier.weight(1f)
-                                    )
+                        // Número de sensor
+                        OutlinedTextField(
+                            value = soilSensNum,
+                            onValueChange = { 
+                                if (it.all { char -> char.isDigit() } && it.length <= 2) {
+                                    soilSensNum = it
                                 }
-                            }
-                            
-                            if (intervaloSeleccionado != null) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Button(
-                                    onClick = {
-                                        if (plantIdEditando != null && !actualizandoIntervalo) {
-                                            actualizandoIntervalo = true
-                                            coroutineScope.launch {
-                                                val exito = updateSchedulerInterval(
-                                                    serverInput = serverInput,
-                                                    jobId = plantIdEditando!!, // Usar plant_id como job_id
-                                                    seconds = intervaloSeleccionado!!
-                                                )
-                                                actualizandoIntervalo = false
-                                                if (exito) {
-                                                    android.widget.Toast.makeText(
-                                                        context,
-                                                        "Intervalo actualizado a ${intervalos.find { it.first == intervaloSeleccionado }?.second}, ",
-                                                        android.widget.Toast.LENGTH_SHORT
-                                                    ).show()
-                                                    intervaloSeleccionado = null
-                                                } else {
-                                                    android.widget.Toast.makeText(
-                                                        context,
-                                                        "Error al actualizar el intervalo",
-                                                        android.widget.Toast.LENGTH_SHORT
-                                                    ).show()
-                                                }
-                                            }
-                                        }
-                                    },
-                                    enabled = !actualizandoIntervalo,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    if (actualizandoIntervalo) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(16.dp),
-                                            strokeWidth = 2.dp
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Actualizando...")
-                                    } else {
-                                        Text("Actualizar intervalo")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = { 
-                            if (plantIdEditando != null) {
-                                // Permitir guardar nombre vacío para restaurar el ID original
-                                onEditPlantName(plantIdEditando!!, nuevoNombrePlanta.trim())
-                            }
-                            showEditDialog = false
-                            plantIdEditando = null
-                            nuevoNombrePlanta = ""
-                            intervaloSeleccionado = null
-                            actualizandoIntervalo = false
-                        }
-                    ) {
-                        Text("Guardar nombre")
-                    }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = { 
-                            showEditDialog = false
-                            plantIdEditando = null
-                            nuevoNombrePlanta = ""
-                            intervaloSeleccionado = null
-                            actualizandoIntervalo = false
-                        }
-                    ) {
-                        Text("Cancelar")
+                            },
+                            label = { Text("Número de sensor de suelo") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
                     }
                 }
-            )
+            }
+            
+            // Botón de guardar
+            item {
+                Button(
+                    onClick = {
+                        guardando = true
+                        coroutineScope.launch {
+                            // Solo actualizar campos que cambiaron
+                            val cambios = mutableMapOf<String, Any>()
+                            
+                            if (plantName != plant.plant_name) {
+                                cambios["plantName"] = plantName
+                            }
+                            if (plantType != plant.plant_type) {
+                                cambios["plantType"] = plantType
+                            }
+                            if (plantUpdatePoll != plant.plant_update_poll) {
+                                cambios["plantUpdatePoll"] = plantUpdatePoll
+                            }
+                            if (updatePollActivated != plant.update_poll_activated) {
+                                cambios["updatePollActivated"] = updatePollActivated
+                            }
+                            val soilSensNumInt = soilSensNum.toIntOrNull()
+                            if (soilSensNumInt != null && soilSensNumInt != plant.soil_sens_num) {
+                                cambios["soilSensNum"] = soilSensNumInt
+                            }
+                            
+                            if (cambios.isNotEmpty()) {
+                                val exito = updatePlant(
+                                    serverInput = serverInput,
+                                    plantId = plant.plant_id,
+                                    plantName = cambios["plantName"] as? String,
+                                    plantType = cambios["plantType"] as? String,
+                                    plantDate = null, // No editable
+                                    plantUpdatePoll = cambios["plantUpdatePoll"] as? Int,
+                                    updatePollActivated = cambios["updatePollActivated"] as? Boolean,
+                                    soilSensNum = cambios["soilSensNum"] as? Int
+                                )
+                                
+                                guardando = false
+                                
+                                if (exito) {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "Planta actualizada exitosamente",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                    onSave()
+                                    onBack()
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "Error al actualizar la planta",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            } else {
+                                guardando = false
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "No hay cambios para guardar",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    },
+                    enabled = !guardando,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                ) {
+                    if (guardando) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Guardando...")
+                    } else {
+                        Text("Guardar cambios")
+                    }
+                }
+            }
         }
     }
 }
@@ -1371,7 +1514,7 @@ fun DatosPlantaServidorScreen(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                         Text(
-                                            "${r.moisture_value}%",
+                                            "${r.moisture_value}",
                                             fontSize = 18.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1911,13 +2054,67 @@ fun PlantDataFilterScreen(
                     )
                 }
                 Spacer(Modifier.height(16.dp))
-                // Gráfica simple en Canvas
+                
+                // Funciones auxiliares para calcular rangos Y personalizados
+                fun getYRangeForMetric(metric: String, values: List<Float>): Pair<Float, Float> {
+                    val vMin = values.minOrNull() ?: 0f
+                    val vMax = values.maxOrNull() ?: 1f
+                    
+                    return when (metric) {
+                        "Luz" -> {
+                            // Lux: de 0, incrementos de 1000
+                            val maxRounded = ((vMax / 1000f).toInt() + 1) * 1000f
+                            Pair(0f, maxRounded)
+                        }
+                        "Temperatura" -> {
+                            // Temperatura: de 0, incrementos de 5
+                            val maxRounded = ((vMax / 5f).toInt() + 1) * 5f
+                            Pair(0f, maxRounded)
+                        }
+                        "Suelo" -> {
+                            // Humedad de suelo: de 0, incrementos de 100
+                            val maxRounded = ((vMax / 100f).toInt() + 1) * 100f
+                            Pair(0f, maxRounded)
+                        }
+                        "Humedad" -> {
+                            // Humedad normal: de 0, incrementos de 5
+                            val maxRounded = ((vMax / 5f).toInt() + 1) * 5f
+                            Pair(0f, maxRounded)
+                        }
+                        else -> {
+                            val safeRange = if (vMax - vMin < 1e-6f) 1f else (vMax - vMin)
+                            Pair(vMin, vMax)
+                        }
+                    }
+                }
+                
+                fun getYIncrementForMetric(metric: String): Float {
+                    return when (metric) {
+                        "Luz" -> 1000f
+                        "Temperatura" -> 5f
+                        "Suelo" -> 100f
+                        "Humedad" -> 5f
+                        else -> 1f
+                    }
+                }
+                
+                // Preparar datos
                 val values = muestra.mapNotNull { it.replace(",", ".").toFloatOrNull() }
-                val vMin = values.minOrNull() ?: 0f
-                val vMax = values.maxOrNull() ?: 1f
-                val safeRange = if (vMax - vMin < 1e-6f) 1f else (vMax - vMin)
+                val (yMin, yMax) = getYRangeForMetric(selectedMetric, values)
+                val yRange = yMax - yMin
+                val yIncrement = getYIncrementForMetric(selectedMetric)
+                
+                // Preparar timestamps para eje X
+                val timestamps = sampled.map { item ->
+                    val millis = if (item.timestamp > 1000000000000L) item.timestamp else item.timestamp * 1000
+                    millis
+                }
+                val timeMin = timestamps.minOrNull() ?: 0L
+                val timeMax = timestamps.maxOrNull() ?: 1L
+                val timeRange = (timeMax - timeMin).toFloat()
 
                 val axisColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
                 val lineColor = MaterialTheme.colorScheme.primary
                 val pointColor = MaterialTheme.colorScheme.secondary
                 val textColorOutside = MaterialTheme.colorScheme.onSurface
@@ -1933,16 +2130,29 @@ fun PlantDataFilterScreen(
                             shape = RoundedCornerShape(12.dp)
                         )
                 ) {
-                    if (values.size < 2) return@Canvas
+                    if (values.size < 2 || timestamps.size != values.size) return@Canvas
 
-                    // Padding interno
-                    val leftPad = 48f
+                    // Padding interno (más espacio para etiquetas, especialmente abajo para etiquetas rotadas)
+                    val leftPad = 60f
                     val rightPad = 16f
-                    val topPad = 16f
-                    val bottomPad = 32f
+                    val topPad = 24f
+                    val bottomPad = 64f // Aumentado para acomodar etiquetas rotadas
 
                     val w = size.width - leftPad - rightPad
                     val h = size.height - topPad - bottomPad
+
+                    // Paint para etiquetas
+                    val axisLabelPaint = android.graphics.Paint().apply {
+                        color = textColorOutside.toArgb()
+                        textSize = 28f
+                        isAntiAlias = true
+                    }
+                    
+                    val valueLabelPaint = android.graphics.Paint().apply {
+                        color = textColorOutside.toArgb()
+                        textSize = 32f
+                        isAntiAlias = true
+                    }
 
                     // Ejes
                     // X axis
@@ -1959,14 +2169,54 @@ fun PlantDataFilterScreen(
                         end = Offset(leftPad, size.height - bottomPad),
                         strokeWidth = 2f
                     )
+                    
+                    // Líneas de cuadrícula y etiquetas del eje Y
+                    val ySteps = ((yMax - yMin) / yIncrement).toInt() + 1
+                    for (i in 0 until ySteps) {
+                        val yValue = yMin + (i * yIncrement)
+                        val yPos = topPad + (h * (1f - (yValue - yMin) / yRange))
+                        
+                        // Línea de cuadrícula
+                        if (i > 0 && i < ySteps) {
+                            drawLine(
+                                color = gridColor,
+                                start = Offset(leftPad, yPos),
+                                end = Offset(size.width - rightPad, yPos),
+                                strokeWidth = 1f
+                            )
+                        }
+                        
+                        // Etiqueta del eje Y
+                        val yLabel = when (selectedMetric) {
+                            "Luz" -> "${yValue.toInt()}"
+                            "Temperatura" -> "${yValue.toInt()}°"
+                            "Suelo" -> "${yValue.toInt()}"
+                            "Humedad" -> "${yValue.toInt()}%"
+                            else -> String.format(java.util.Locale.US, "%.1f", yValue)
+                        }
+                        drawIntoCanvas { cnv ->
+                            val textWidth = axisLabelPaint.measureText(yLabel)
+                            cnv.nativeCanvas.drawText(
+                                yLabel,
+                                leftPad - textWidth - 8f,
+                                yPos + (axisLabelPaint.textSize / 3f),
+                                axisLabelPaint
+                            )
+                        }
+                    }
 
-                    val stepX = if (values.size == 1) w else w / (values.size - 1)
+                    // Calcular posiciones X basadas en tiempo real
+                    val xPositions = timestamps.mapIndexed { i, timestamp ->
+                        val timeOffset = (timestamp - timeMin).toFloat()
+                        val xRatio = if (timeRange > 0) timeOffset / timeRange else (i.toFloat() / (values.size - 1).coerceAtLeast(1))
+                        leftPad + (xRatio * w)
+                    }
 
                     // Línea de la serie
                     var prev: Offset? = null
                     values.forEachIndexed { i, v ->
-                        val x = leftPad + i * stepX
-                        val y = topPad + (h * (1f - (v - vMin) / safeRange))
+                        val x = xPositions[i]
+                        val y = topPad + (h * (1f - (v - yMin) / yRange))
                         val p = Offset(x, y)
                         if (prev != null) {
                             drawLine(
@@ -1980,17 +2230,46 @@ fun PlantDataFilterScreen(
                         prev = p
                     }
 
-                    // Puntos + etiquetas con tamaño constante
-                    val textColor = textColorOutside
-                    val labelPaint = android.graphics.Paint().apply {
-                        color = textColor.toArgb()
-                        textSize = 36f
-                        isAntiAlias = true
+                    // Etiquetas del eje X (tiempo) - rotadas para evitar solapamiento
+                    val timeFormat = java.text.SimpleDateFormat("HH:mm", java.util.Locale("es", "MX")).apply {
+                        timeZone = java.util.TimeZone.getTimeZone("GMT-06:00")
                     }
                     
+                    // Mostrar etiquetas de tiempo (cada 2-3 puntos para evitar solapamiento)
+                    val xLabelStep = if (values.size <= 5) 1 else if (values.size <= 10) 2 else 3
+                    timestamps.forEachIndexed { i, timestamp ->
+                        if (i % xLabelStep == 0 || i == values.size - 1) {
+                            val x = xPositions[i]
+                            val date = java.util.Date(timestamp)
+                            val timeLabel = timeFormat.format(date)
+                            
+                            drawIntoCanvas { cnv ->
+                                // Rotar el canvas 90 grados para las etiquetas del eje X (vertical)
+                                cnv.nativeCanvas.save()
+                                val textWidth = axisLabelPaint.measureText(timeLabel)
+                                val textHeight = axisLabelPaint.textSize
+                                
+                                // Para rotación de -90 grados, necesitamos ajustar la posición
+                                // El texto se dibuja de arriba hacia abajo cuando está rotado -90
+                                cnv.nativeCanvas.translate(x, size.height - bottomPad + 30f)
+                                cnv.nativeCanvas.rotate(-90f) // Rotar -90 grados (vertical, de arriba hacia abajo)
+                                
+                                // Dibujar el texto rotado (centrado)
+                                cnv.nativeCanvas.drawText(
+                                    timeLabel,
+                                    -textWidth / 2f, // Centrar horizontalmente (ahora es vertical después de rotar)
+                                    textHeight / 3f, // Ajustar posición vertical
+                                    axisLabelPaint
+                                )
+                                cnv.nativeCanvas.restore()
+                            }
+                        }
+                    }
+                    
+                    // Puntos + etiquetas de valores
                     values.forEachIndexed { i, v ->
-                        val x = leftPad + i * stepX
-                        val y = topPad + (h * (1f - (v - vMin) / safeRange))
+                        val x = xPositions[i]
+                        val y = topPad + (h * (1f - (v - yMin) / yRange))
                         val point = Offset(x, y)
                         
                         // Si este punto está seleccionado, dibujar círculo de resaltado
@@ -2011,12 +2290,18 @@ fun PlantDataFilterScreen(
                         // Dibujar el punto normal
                         drawCircle(color = pointColor, radius = 4f, center = point)
                         
-                        // Dibujar etiqueta
-                        val label = String.format(java.util.Locale.US, "%.1f", v)
+                        // Dibujar etiqueta de valor
+                        val label = when (selectedMetric) {
+                            "Luz" -> "${v.toInt()}"
+                            "Temperatura" -> "${v.toInt()}°"
+                            "Suelo" -> "${v.toInt()}"
+                            "Humedad" -> "${v.toInt()}%"
+                            else -> String.format(java.util.Locale.US, "%.1f", v)
+                        }
                         val tx = (x + 6f).coerceAtMost(size.width - 24f)
-                        val ty = (y - 8f).coerceAtLeast(24f)
+                        val ty = (y - 8f).coerceAtLeast(topPad + 8f)
                         drawIntoCanvas { cnv ->
-                            cnv.nativeCanvas.drawText(label, tx, ty, labelPaint)
+                            cnv.nativeCanvas.drawText(label, tx, ty, valueLabelPaint)
                         }
                     }
                 }
@@ -2057,7 +2342,7 @@ fun PlantDataFilterScreen(
             fun unitFor(metric: String): String = when (metric) {
                 "Temperatura" -> "°C"
                 "Humedad" -> "%"
-                "Suelo" -> "%"
+                "Suelo" -> ""
                 "Luz" -> " lux"
                 else -> ""
             }
@@ -2149,7 +2434,7 @@ fun PlantDataFilterScreen(
                                         fontSize = 14.sp
                                     )
                                     Text(
-                                        "🌱 Suelo: ${item.moisture_value.replace(",", ".")}%",
+                                        "🌱 Suelo: ${item.moisture_value.replace(",", ".")}",
                                         fontSize = 14.sp
                                     )
                                     if (item.sensor_num.isNotEmpty()) {
@@ -2205,7 +2490,7 @@ fun ListaRegistrosFiltradosScreen(
                     ) {
                         Column(Modifier.padding(12.dp)) {
                             Text(date, fontWeight = FontWeight.Medium)
-                            Text("Temp: ${r.temperature}°C | HR: ${r.relative_humidity}% | Lux: ${r.lux} | Suelo: ${r.moisture_value}%")
+                            Text("Temp: ${r.temperature}°C | HR: ${r.relative_humidity}% | Lux: ${r.lux} | Suelo: ${r.moisture_value}")
                         }
                     }
                 }
@@ -2315,7 +2600,7 @@ suspend fun getServerPlantData(serverInput: String, plantId: String, maxRecords:
 
             val url = java.net.URL(urlString) // Usamos la nueva URL
             val conn = (url.openConnection() as java.net.HttpURLConnection)
-
+            
             // Configuración de red (sin cambios)
             conn.requestMethod = "GET"
             conn.connectTimeout = 15000
@@ -2324,15 +2609,15 @@ suspend fun getServerPlantData(serverInput: String, plantId: String, maxRecords:
             conn.setRequestProperty("User-Agent", "CultivApp/1.0")
             conn.setRequestProperty("Accept", "application/json")
             conn.setRequestProperty("Cache-Control", "no-cache")
-
+            
             Log.d("ServerConnection", "Conectando...")
-
+            
             val code = conn.responseCode
             if (code == 200) {
                 val body = conn.inputStream.bufferedReader().readText()
                 val json = org.json.JSONArray(body)
                 val items = mutableListOf<ServerPlantData>()
-
+                
                 Log.d("ServerConnection", "JSON recibido con ${json.length()} elementos totales")
 
                 // --- YA NO NECESITAMOS FILTRAR ---
@@ -2340,18 +2625,18 @@ suspend fun getServerPlantData(serverInput: String, plantId: String, maxRecords:
                 for (i in 0 until json.length()) {
                     val o = json.getJSONObject(i)
                     // Simplemente añadimos cada objeto del array.
-                    items.add(
-                        ServerPlantData(
-                            plant_id = o.optString("plant_id"),
-                            timestamp = o.optLong("timestamp"),
-                            temperature = o.optString("temperature"),
-                            relative_humidity = o.optString("relative_humidity"),
-                            lux = o.optString("lux"),
-                            moisture_value = o.optString("moisture_value"),
-                            sensor_num = o.optString("sensor_num")
+                        items.add(
+                            ServerPlantData(
+                                plant_id = o.optString("plant_id"),
+                                timestamp = o.optLong("timestamp"),
+                                temperature = o.optString("temperature"),
+                                relative_humidity = o.optString("relative_humidity"),
+                                lux = o.optString("lux"),
+                                moisture_value = o.optString("moisture_value"),
+                                sensor_num = o.optString("sensor_num")
+                            )
                         )
-                    )
-                }
+                    }
 
                 // Ordenar por timestamp y tomar solo los últimos N registros
                 val sortedItems = items.sortedBy { it.timestamp }
@@ -2359,7 +2644,7 @@ suspend fun getServerPlantData(serverInput: String, plantId: String, maxRecords:
                     Log.w("ServerConnection", "⚠️ Se encontraron ${sortedItems.size} registros, limitando a los últimos $maxRecords")
                     sortedItems.takeLast(maxRecords)
                 } else {
-                    sortedItems
+                sortedItems
                 }
 
                 Log.d("ServerConnection", "Datos de planta procesados: ${limitedItems.size} registros")
@@ -2381,6 +2666,105 @@ suspend fun getServerPlantData(serverInput: String, plantId: String, maxRecords:
     }
 }
 
+
+// Función para actualizar una planta (UPDATE /plant)
+suspend fun updatePlant(
+    serverInput: String,
+    plantId: String,
+    plantName: String? = null,
+    plantType: String? = null,
+    plantDate: Long? = null,
+    plantUpdatePoll: Int? = null,
+    updatePollActivated: Boolean? = null,
+    soilSensNum: Int? = null
+): Boolean {
+    return withContext(Dispatchers.IO) {
+        try {
+            Log.d("ServerConnection", "=== ACTUALIZANDO PLANTA ===")
+            Log.d("ServerConnection", "IP y Puerto: $serverInput, Plant ID: $plantId")
+            
+            // Detectar si estamos en emulador y ajustar la IP
+            val adjustedServerInput = if (isRunningOnEmulator()) {
+                when {
+                    serverInput.startsWith("10.214.49.194") -> serverInput.replace("10.214.49.194", "10.0.2.2")
+                    serverInput.startsWith("192.168.") -> serverInput.replace("192.168.", "10.0.2.2")
+                    else -> serverInput
+                }
+            } else {
+                serverInput
+            }
+            
+            val url = java.net.URL("http://${adjustedServerInput}/plant")
+            val conn = (url.openConnection() as java.net.HttpURLConnection)
+            
+            // Usar PUT en lugar de UPDATE/PATCH ya que HttpURLConnection no soporta métodos personalizados
+            // El backend debe aceptar PUT además de UPDATE
+            conn.requestMethod = "PUT"
+            conn.connectTimeout = 10000
+            conn.readTimeout = 10000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("User-Agent", "CultivApp/1.0")
+            conn.setRequestProperty("Accept", "application/json")
+            
+            // Crear el JSON body solo con los campos que se quieren actualizar
+            val jsonBody = org.json.JSONObject()
+            jsonBody.put("plant_id", plantId)
+            
+            if (plantName != null) {
+                jsonBody.put("plant_name", plantName)
+                Log.d("ServerConnection", "Actualizando plant_name: $plantName")
+            }
+            if (plantType != null) {
+                jsonBody.put("plant_type", plantType)
+                Log.d("ServerConnection", "Actualizando plant_type: $plantType")
+            }
+            if (plantDate != null) {
+                jsonBody.put("plant_date", plantDate)
+                Log.d("ServerConnection", "Actualizando plant_date: $plantDate")
+            }
+            if (plantUpdatePoll != null) {
+                jsonBody.put("plant_update_poll", plantUpdatePoll)
+                Log.d("ServerConnection", "Actualizando plant_update_poll: $plantUpdatePoll")
+            }
+            if (updatePollActivated != null) {
+                jsonBody.put("update_poll_activated", updatePollActivated)
+                Log.d("ServerConnection", "Actualizando update_poll_activated: $updatePollActivated")
+            }
+            if (soilSensNum != null) {
+                jsonBody.put("soil_sens_num", soilSensNum)
+                Log.d("ServerConnection", "Actualizando soil_sens_num: $soilSensNum")
+            }
+            
+            // Enviar el body
+            conn.outputStream.use { output ->
+                output.write(jsonBody.toString().toByteArray(Charsets.UTF_8))
+            }
+            
+            val code = conn.responseCode
+            if (code in 200..299) {
+                val responseBody = try {
+                    conn.inputStream.bufferedReader().readText()
+                } catch (e: Exception) {
+                    ""
+                }
+                Log.d("ServerConnection", "Planta actualizada exitosamente: $responseBody")
+                true
+            } else {
+                val errorBody = try {
+                    conn.errorStream?.bufferedReader()?.readText() ?: "Sin detalles"
+                } catch (e: Exception) {
+                    "Error al leer respuesta"
+                }
+                Log.e("ServerConnection", "Error HTTP $code al actualizar planta: $errorBody")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e("ServerConnection", "Error actualizando planta: ${e.message}")
+            false
+        }
+    }
+}
 
 // Función para actualizar el intervalo de actualización del scheduler
 suspend fun updateSchedulerInterval(

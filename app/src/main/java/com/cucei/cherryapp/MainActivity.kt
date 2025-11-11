@@ -134,6 +134,8 @@ import com.cucei.cherryapp.PlantAlert
 import com.cucei.cherryapp.ConectarServidorScreen
 import com.cucei.cherryapp.ListaPlantasServidorScreen
 import com.cucei.cherryapp.DatosPlantaServidorScreen
+import com.cucei.cherryapp.EditarPlantaScreen
+import com.cucei.cherryapp.updatePlant
 
 // Sealed class Pantalla actualizada
 sealed class Pantalla {
@@ -146,6 +148,7 @@ sealed class Pantalla {
     object ListaRegistrosFiltrados : Pantalla()
     object Galeria : Pantalla()
     object AnalisisPlanta : Pantalla()
+    object EditarPlanta : Pantalla()
     
 }
 
@@ -265,11 +268,11 @@ fun CherryApp() {
     var nuevoNombreHuerto by remember { mutableStateOf("") }
     var showEliminarHuertoDialog by remember { mutableStateOf(false) }
     
-    // --- Estado para forzar actualización de nombres de plantas ---
-    var plantNamesUpdateKey by remember { mutableStateOf(0) }
-    
     // --- Estado para últimos registros de plantas (caché) ---
     var plantLastRecords by remember { mutableStateOf<Map<String, PlantLastRecord>>(emptyMap()) }
+    
+    // --- Estado para edición de planta ---
+    var plantaEditando by remember { mutableStateOf<ServerPlant?>(null) }
 
     // Navigation Drawer state
     var drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -365,31 +368,6 @@ fun CherryApp() {
         return huertosGuardados.find { "${it.ip}:${it.puerto}" == serverInput }?.nombre
     }
     
-    // Funciones para manejar nombres personalizados de plantas
-    fun savePlantName(plantId: String, nombre: String) {
-        val sharedPrefs = context.getSharedPreferences("CultivAppPrefs", Context.MODE_PRIVATE)
-        val editor = sharedPrefs.edit()
-        
-        // Si el nombre está vacío, eliminar la entrada para restaurar el ID original
-        if (nombre.isBlank()) {
-            editor.remove("plant_name_$plantId")
-        } else {
-            editor.putString("plant_name_$plantId", nombre)
-        }
-        editor.apply()
-    }
-    
-    fun loadPlantName(plantId: String): String? {
-        val sharedPrefs = context.getSharedPreferences("CultivAppPrefs", Context.MODE_PRIVATE)
-        val nombre = sharedPrefs.getString("plant_name_$plantId", null)
-        // Si el nombre está vacío, tratarlo como null para mostrar el ID original
-        return if (nombre.isNullOrBlank()) null else nombre
-    }
-    
-    fun getPlantDisplayName(plantId: String): String {
-        val nombrePersonalizado = loadPlantName(plantId)
-        return nombrePersonalizado ?: plantId
-    }
 
     // Para el doble toque para salir y Snackbar
     var backPressedTime by remember { mutableStateOf(0L) }
@@ -505,6 +483,11 @@ fun CherryApp() {
             Pantalla.DatosPlantaServidor -> {
                 Log.d("BackHandler", "Volviendo a lista de plantas del servidor")
                 pantalla = Pantalla.ListaPlantasServidor
+            }
+            Pantalla.EditarPlanta -> {
+                Log.d("BackHandler", "Volviendo a lista de plantas desde edición")
+                pantalla = Pantalla.ListaPlantasServidor
+                plantaEditando = null
             }
             else -> {
                 Log.d("BackHandler", "Principal: Estado no manejado - $pantalla")
@@ -758,6 +741,7 @@ fun CherryApp() {
                                 Pantalla.DatosPlantaServidor -> "Datos de la planta"
                                 Pantalla.AnalisisPlanta -> "Análisis de Plantas"
                                 Pantalla.Galeria -> "Galería"
+                                Pantalla.EditarPlanta -> "Editar Planta"
                                 
                                 else -> "CultivApp"
                             }
@@ -909,26 +893,20 @@ fun CherryApp() {
                         }
                     }
 
-                    key(plantNamesUpdateKey) {
-                        ListaPlantasServidorScreen(
-                            serverInput = serverInput,
-                            serverPlants = serverPlants,
-                            isConnecting = isConnecting,
-                            onPlantClick = { plantId ->
-                                selectedPlantId = plantId
-                                pantalla = Pantalla.DatosPlantaFiltro
-                            },
-                            getPlantDisplayName = { plantId -> getPlantDisplayName(plantId) },
-                            onEditPlantName = { plantId, nuevoNombre ->
-                                savePlantName(plantId, nuevoNombre)
-                                plantNamesUpdateKey++ // Forzar recomposición
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Nombre de planta guardado")
-                                }
-                            },
-                            plantLastRecords = plantLastRecords
-                        )
-                    }
+                    ListaPlantasServidorScreen(
+                        serverInput = serverInput,
+                        serverPlants = serverPlants,
+                        isConnecting = isConnecting,
+                        onPlantClick = { plantId ->
+                            selectedPlantId = plantId
+                            pantalla = Pantalla.DatosPlantaFiltro
+                        },
+                        onEditPlant = { plant ->
+                            plantaEditando = plant
+                            pantalla = Pantalla.EditarPlanta
+                        },
+                        plantLastRecords = plantLastRecords
+                    )
                 }
 
 // Datos de la planta elegida (nueva pantalla de filtros)
@@ -963,6 +941,28 @@ fun CherryApp() {
                         title = "Registros filtrados",
                         items = registrosFiltrados,
                         onBack = { pantalla = Pantalla.DatosPlantaFiltro }
+                    )
+                }
+                
+                // Pantalla de edición de planta
+                if (pantalla == Pantalla.EditarPlanta && plantaEditando != null && serverInput.isNotBlank()) {
+                    EditarPlantaScreen(
+                        serverInput = serverInput,
+                        plant = plantaEditando!!,
+                        onBack = {
+                            pantalla = Pantalla.ListaPlantasServidor
+                            plantaEditando = null
+                        },
+                        onSave = {
+                            // Recargar lista de plantas después de guardar
+                            coroutineScope.launch {
+                                try {
+                                    serverPlants = getServerPlants(serverInput)
+                                } catch (e: Exception) {
+                                    Log.e("Server", "Error recargando plantas", e)
+                                }
+                            }
+                        }
                     )
                 }
 
@@ -1008,13 +1008,13 @@ fun CherryApp() {
                         },
                         onConnectClick = {
                             // Conectar directamente sin mostrar dialogs adicionales
-                            if (!recentServers.contains(serverInput)) {
-                                recentServers = (listOf(serverInput) + recentServers).take(5)
+                                if (!recentServers.contains(serverInput)) {
+                                    recentServers = (listOf(serverInput) + recentServers).take(5)
                                 saveRecentServers(recentServers)
-                            }
-                            actualizarUltimaConexion(serverInput)
-                            pantalla = Pantalla.ListaPlantasServidor
-                        },
+                                }
+                                actualizarUltimaConexion(serverInput)
+                                pantalla = Pantalla.ListaPlantasServidor
+                            },
                         onTestConnection = {
                             // Implementar prueba de conexión
                                     coroutineScope.launch {
@@ -1217,7 +1217,7 @@ fun CherryApp() {
 
                             // Galería (moderna)
             if (pantalla == Pantalla.Galeria && !showCamaraPersonalizada && imagenSeleccionada == null) {
-                Column(Modifier.fillMaxSize()) {
+                    Column(Modifier.fillMaxSize()) {
                     // Toggle para alternar entre fotos y análisis
                     Card(
                         modifier = Modifier
@@ -1236,12 +1236,12 @@ fun CherryApp() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             // Botón Fotos
-                            Button(
+                                    Button(
                                 onClick = { 
                                     showAnalisisEnGaleria = false
                                     fotos = getFotosNormales(FOTOS_DIR)
                                 },
-                                colors = ButtonDefaults.buttonColors(
+                                        colors = ButtonDefaults.buttonColors(
                                     containerColor = if (!showAnalisisEnGaleria) 
                                         MaterialTheme.colorScheme.primary 
                                     else 
@@ -1296,7 +1296,7 @@ fun CherryApp() {
                     }
                     
                     // Contenido de la galería
-                    Box(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize()) {
                     if (fotos.isEmpty()) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Card(
@@ -1422,7 +1422,7 @@ fun CherryApp() {
                             modifier = Modifier.size(28.dp)
                         )
                     }
-                }
+                    }
                 }
             }
 
@@ -1981,46 +1981,46 @@ fun CherryApp() {
                                             
                                             // Preparar la imagen para análisis real con TensorFlow
                                             val tempFile = File(context.cacheDir, "temp_real_analysis_${System.currentTimeMillis()}.jpg")
-                                            try {
-                                                val originalBitmap = BitmapFactory.decodeFile(file.absolutePath)
-                                                if (originalBitmap != null) {
-                                                    val matrix = Matrix()
-                                                    matrix.postRotate(rotationAngle)
-                                                    val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
-                                                    
-                                                    val outputStream = tempFile.outputStream()
-                                                    rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
-                                                    outputStream.close()
-                                                    
-                                                    originalBitmap.recycle()
-                                                    rotatedBitmap.recycle()
-                                                    
+                                                try {
+                                                    val originalBitmap = BitmapFactory.decodeFile(file.absolutePath)
+                                                    if (originalBitmap != null) {
+                                                        val matrix = Matrix()
+                                                        matrix.postRotate(rotationAngle)
+                                                        val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
+                                                        
+                                                        val outputStream = tempFile.outputStream()
+                                                        rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
+                                                        outputStream.close()
+                                                        
+                                                        originalBitmap.recycle()
+                                                        rotatedBitmap.recycle()
+                                                        
                                                     // Marcar que NO viene de galería (viene de vista previa)
                                                     analisisFromGaleria = false
                                                     
                                                     // Mostrar pantalla de análisis real
                                                     imagenRealAnalysis = tempFile
                                                     showRealAnalysisScreen = true
-                                                    showVistaPrevia = null
-                                                    rotationAngle = 0f
-                                                    imageAnalysis = null
-                                                    showAnalysisDetails = false
-                                                    
+                                                            showVistaPrevia = null
+                                                            rotationAngle = 0f
+                                                            imageAnalysis = null
+                                                            showAnalysisDetails = false
+                                                        
                                                     // Iniciar análisis real con TensorFlow Lite
-                                                    coroutineScope.launch {
+                                                            coroutineScope.launch { 
                                                         realAnalysisProgress = 0f
                                                         realAnalysisMessage = "Iniciando análisis..."
-                                                        
+                                                            
                                                         // Simular carga real con diferentes etapas
-                                                        val etapas = listOf(
-                                                            "Preparando imagen..." to 0.2f,
+                                                            val etapas = listOf(
+                                                                "Preparando imagen..." to 0.2f,
                                                             "Cargando modelo de IA..." to 0.4f,
                                                             "Analizando características..." to 0.6f,
                                                             "Procesando con TensorFlow..." to 0.8f,
                                                             "Generando resultados..." to 1.0f
-                                                        )
-                                                        
-                                                        etapas.forEach { (mensaje, progreso) ->
+                                                            )
+                                                            
+                                                            etapas.forEach { (mensaje, progreso) ->
                                                             realAnalysisMessage = mensaje
                                                             delay(800) // 800ms por etapa = 4 segundos total
                                                             realAnalysisProgress = progreso
@@ -2047,18 +2047,18 @@ fun CherryApp() {
                                                                 confidence = 0.0f,
                                                                 preventionMeasures = listOf("No se pudo cargar el modelo de IA.")
                                                             )
-                                                        }
-                                                        
-                                                        delay(500) // Pausa final
+                                                                    }
+                                                                    
+                                                                    delay(500) // Pausa final
                                                         showRealAnalysisScreen = false
                                                         showResultadosAnalisis = "Análisis real completado"
+                                                                }
+                                                    }
+                                                } catch (e: Exception) {
+                                                    coroutineScope.launch { 
+                                                        snackbarHostState.showSnackbar("Error al procesar la imagen: ${e.message}") 
                                                     }
                                                 }
-                                            } catch (e: Exception) {
-                                                coroutineScope.launch { 
-                                                    snackbarHostState.showSnackbar("Error al procesar la imagen: ${e.message}") 
-                                                }
-                                            }
                                         },
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = MaterialTheme.colorScheme.secondary,
@@ -2218,7 +2218,7 @@ fun CherryApp() {
                     AlertDialog(
                         onDismissRequest = { showAnalysisRestrictionDialog = false },
                         title = { Text("⚠️ Imagen no analizable") },
-                        text = { 
+                        text = {
                             Text("Esta imagen es un resultado de análisis previo y no se puede analizar nuevamente. Por favor, selecciona una foto original para realizar el análisis con IA.") 
                         },
                         confirmButton = {
@@ -3017,12 +3017,12 @@ fun loadTensorFlowModel(context: Context): Interpreter? {
         if (!modelFile.exists()) {
             Log.d("TensorFlow", "Modelo no existe, copiando desde assets...")
             try {
-                context.assets.open("tomato.tflite").use { input ->
-                    modelFile.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
+            context.assets.open("tomato.tflite").use { input ->
+                modelFile.outputStream().use { output ->
+                    input.copyTo(output)
                 }
-                Log.d("TensorFlow", "Modelo copiado exitosamente")
+            }
+            Log.d("TensorFlow", "Modelo copiado exitosamente")
             } catch (e: Exception) {
                 Log.e("TensorFlow", "Error copiando modelo: ${e.message}")
                 e.printStackTrace()
