@@ -271,6 +271,11 @@ fun CherryApp() {
     // --- Estado para últimos registros de plantas (caché) ---
     var plantLastRecords by remember { mutableStateOf<Map<String, PlantLastRecord>>(emptyMap()) }
     
+    // --- Estado derivado: nombre de la planta seleccionada ---
+    val selectedPlantName = selectedPlantId?.let { id ->
+        serverPlants.find { it.plant_id == id }?.plant_name
+    }
+    
     // --- Estado para edición de planta ---
     var plantaEditando by remember { mutableStateOf<ServerPlant?>(null) }
 
@@ -483,6 +488,10 @@ fun CherryApp() {
             Pantalla.DatosPlantaServidor -> {
                 Log.d("BackHandler", "Volviendo a lista de plantas del servidor")
                 pantalla = Pantalla.ListaPlantasServidor
+            }
+            Pantalla.DatosPlantaFiltro -> {
+                Log.d("BackHandler", "Volviendo a lista de plantas filtradas")
+                pantalla = Pantalla.ListaRegistrosFiltrados
             }
             Pantalla.EditarPlanta -> {
                 Log.d("BackHandler", "Volviendo a lista de plantas desde edición")
@@ -739,6 +748,7 @@ fun CherryApp() {
                                     if (nombreHuerto != null) "Plantas de $nombreHuerto" else "Plantas del Huerto"
                                 }
                                 Pantalla.DatosPlantaServidor -> "Datos de la planta"
+                                Pantalla.DatosPlantaFiltro -> "Registro de plantas"
                                 Pantalla.AnalisisPlanta -> "Análisis de Plantas"
                                 Pantalla.Galeria -> "Galería"
                                 Pantalla.EditarPlanta -> "Editar Planta"
@@ -927,6 +937,7 @@ fun CherryApp() {
                     PlantDataFilterScreen(
                         serverInput = serverInput,
                         selectedPlantId = selId,
+                        selectedPlantName = selectedPlantName,
                         serverPlantData = serverPlantData,
                         isConnecting = isConnecting,
                         onViewRecords = { lista ->

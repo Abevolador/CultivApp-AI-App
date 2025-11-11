@@ -1562,6 +1562,7 @@ fun DatosPlantaServidorScreen(
 fun PlantDataFilterScreen(
     serverInput: String,
     selectedPlantId: String,
+    selectedPlantName: String?,
     serverPlantData: List<ServerPlantData>,
     isConnecting: Boolean,
     onViewRecords: (List<ServerPlantData>) -> Unit,
@@ -1713,10 +1714,13 @@ fun PlantDataFilterScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            val headerTitle = selectedPlantName?.takeIf { it.isNotBlank() } ?: selectedPlantId
             Text(
-                "📊 Registros de plantas",
+                "🌱 $headerTitle",
                 style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             OutlinedButton(onClick = { onViewRecords(filterData()) }) {
                 Text("Ver registros")
