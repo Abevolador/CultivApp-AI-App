@@ -2230,39 +2230,63 @@ fun PlantDataFilterScreen(
                         prev = p
                     }
 
-                    // Etiquetas del eje X (tiempo) - rotadas para evitar solapamiento
+                    // Etiquetas del eje X (tiempo) - distribución uniforme para evitar solapamiento
                     val timeFormat = java.text.SimpleDateFormat("HH:mm", java.util.Locale("es", "MX")).apply {
                         timeZone = java.util.TimeZone.getTimeZone("GMT-06:00")
                     }
                     
-                    // Mostrar etiquetas de tiempo (cada 2-3 puntos para evitar solapamiento)
-                    val xLabelStep = if (values.size <= 5) 1 else if (values.size <= 10) 2 else 3
-                    timestamps.forEachIndexed { i, timestamp ->
-                        if (i % xLabelStep == 0 || i == values.size - 1) {
-                            val x = xPositions[i]
-                            val date = java.util.Date(timestamp)
-                            val timeLabel = timeFormat.format(date)
-                            
-                            drawIntoCanvas { cnv ->
-                                // Rotar el canvas 90 grados para las etiquetas del eje X (vertical)
-                                cnv.nativeCanvas.save()
-                                val textWidth = axisLabelPaint.measureText(timeLabel)
-                                val textHeight = axisLabelPaint.textSize
-                                
-                                // Para rotación de -90 grados, necesitamos ajustar la posición
-                                // El texto se dibuja de arriba hacia abajo cuando está rotado -90
-                                cnv.nativeCanvas.translate(x, size.height - bottomPad + 30f)
-                                cnv.nativeCanvas.rotate(-90f) // Rotar -90 grados (vertical, de arriba hacia abajo)
-                                
-                                // Dibujar el texto rotado (centrado)
-                                cnv.nativeCanvas.drawText(
-                                    timeLabel,
-                                    -textWidth / 2f, // Centrar horizontalmente (ahora es vertical después de rotar)
-                                    textHeight / 3f, // Ajustar posición vertical
-                                    axisLabelPaint
-                                )
-                                cnv.nativeCanvas.restore()
+                    // Calcular número de etiquetas (5-7) distribuidas uniformemente
+                    val numLabels = when {
+                        values.size <= 3 -> values.size
+                        values.size <= 10 -> 5
+                        else -> 7
+                    }
+                    
+                    // Generar posiciones X uniformemente distribuidas
+                    val uniformXPositions = (0 until numLabels).map { index ->
+                        val ratio = if (numLabels > 1) index.toFloat() / (numLabels - 1) else 0.5f
+                        leftPad + (ratio * w)
+                    }
+                    
+                    // Para cada posición uniforme, encontrar el timestamp más cercano
+                    uniformXPositions.forEach { targetX ->
+                        // Encontrar el índice del punto más cercano a esta posición X
+                        var closestIndex = 0
+                        var minDistance = kotlin.math.abs(xPositions[0] - targetX)
+                        
+                        xPositions.forEachIndexed { i, x ->
+                            val distance = kotlin.math.abs(x - targetX)
+                            if (distance < minDistance) {
+                                minDistance = distance
+                                closestIndex = i
                             }
+                        }
+                        
+                        // Obtener el timestamp y la posición X real del punto más cercano
+                        val closestTimestamp = timestamps[closestIndex]
+                        val actualX = xPositions[closestIndex]
+                        val date = java.util.Date(closestTimestamp)
+                        val timeLabel = timeFormat.format(date)
+                        
+                        drawIntoCanvas { cnv ->
+                            // Rotar el canvas 90 grados para las etiquetas del eje X (vertical)
+                            cnv.nativeCanvas.save()
+                            val textWidth = axisLabelPaint.measureText(timeLabel)
+                            val textHeight = axisLabelPaint.textSize
+                            
+                            // Para rotación de -90 grados, necesitamos ajustar la posición
+                            // El texto se dibuja de arriba hacia abajo cuando está rotado -90
+                            cnv.nativeCanvas.translate(actualX, size.height - bottomPad + 30f)
+                            cnv.nativeCanvas.rotate(-90f) // Rotar -90 grados (vertical, de arriba hacia abajo)
+                            
+                            // Dibujar el texto rotado (centrado)
+                            cnv.nativeCanvas.drawText(
+                                timeLabel,
+                                -textWidth / 2f, // Centrar horizontalmente (ahora es vertical después de rotar)
+                                textHeight / 3f, // Ajustar posición vertical
+                                axisLabelPaint
+                            )
+                            cnv.nativeCanvas.restore()
                         }
                     }
                     
@@ -2862,20 +2886,21 @@ suspend fun getLastPlantRecord(
 }
 
 // Función para evaluar avisos de humedad de tierra
-// Nota: Valores altos (>590%) = muy seco (necesita agua)
-//       Valores bajos (<349%) = muy mojado (tiene mucha agua)
+// Nota: Valores altos (>500) = muy seco (necesita agua)
+//       Valores bajos (<400) = muy mojado (tiene mucha agua)
+//       Valores entre 400-500 = OK
 fun evaluateMoistureAlert(moistureValue: String?): PlantAlert? {
     if (moistureValue == null) return null
     
     val moisture = moistureValue.toDoubleOrNull() ?: return null
     
     return when {
-        moisture > 590 -> PlantAlert(
+        moisture > 500 -> PlantAlert(
             type = AlertType.MOISTURE,
             message = "Le hace falta agua",
             severity = AlertSeverity.LOW
         )
-        moisture < 349 -> PlantAlert(
+        moisture < 400 -> PlantAlert(
             type = AlertType.MOISTURE,
             message = "Tiene mucha agua",
             severity = AlertSeverity.HIGH
@@ -2884,7 +2909,7 @@ fun evaluateMoistureAlert(moistureValue: String?): PlantAlert? {
             type = AlertType.MOISTURE,
             message = "Nivel de agua: OK",
             severity = AlertSeverity.OK
-        ) // Entre 350-590, está OK
+        ) // Entre 400-500, está OK
     }
 }
 
